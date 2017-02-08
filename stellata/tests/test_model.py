@@ -3,28 +3,23 @@ import stellata.model
 import stellata.fields
 import stellata.tests.base
 
-import unittest
-import unittest.mock
+db = stellata.tests.base.db
 
-class M(stellata.model.Model):
-    __table__ = 't'
+class A(stellata.model.Model):
+    __table__ = 'a'
+
     id = stellata.fields.UUID()
     foo = stellata.fields.Text()
 
-class TestCreate(stellata.tests.base.Base):
-    @stellata.tests.base.mock_query()
-    def test_single(self, query):
-        M.create({M.id.column: 5, M.foo.column: 'foo'})
-        query.assert_called_with('insert into "t" (foo,id) values (%s,%s) returning id', ['foo', 5])
+class TestSerialize(stellata.tests.base.Base):
+    def test_single(self):
+        a = A(id=1, foo='bar')
+        self.assertEqual(stellata.model.serialize(a), '''{"id": 1, "foo": "bar"}''')
 
-    @stellata.tests.base.mock_query()
-    def test_multi(self, query):
-        M.create([{
-            M.id.column: 1,
-            M.foo.column: 'foo'
-        }, {
-            M.id.column: 2,
-            M.foo.column: 'bar'
-        }])
-
-        query.assert_called_with('insert into "t" (foo,id) values (%s,%s),(%s,%s) returning id', ['foo', 1, 'bar', 2])
+    def test_multi(self):
+        one = A(id=1, foo='bar')
+        two = A(id=2, foo='baz')
+        self.assertEqual(
+            stellata.model.serialize({'a': [one, two]}),
+            '''{"a": [{"id": 1, "foo": "bar"}, {"id": 2, "foo": "baz"}]}'''
+        )

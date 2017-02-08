@@ -3,11 +3,23 @@ import stellata.database
 import unittest
 import unittest.mock
 
+db = stellata.database.initialize(
+    name='stellata_test',
+    user='stellata_test',
+    password='stellata_test'
+)
+
+db2 = stellata.database.Pool(
+    name='stellata_test2',
+    user='stellata_test2',
+    password='stellata_test2'
+)
+
 def mock_execute():
-    return unittest.mock.patch('stellata.database.execute')
+    return unittest.mock.patch('stellata.database.Pool.execute')
 
 def mock_query():
-    return unittest.mock.patch('stellata.database.query')
+    return unittest.mock.patch('stellata.database.Pool.query')
 
 class Base(unittest.TestCase):
     up = None
@@ -15,14 +27,8 @@ class Base(unittest.TestCase):
 
     def setUp(self):
         if self.up:
-            stellata.database.initialize({
-                'name': 'stellata_test',
-                'user': 'stellata_test',
-                'password': 'stellata_test',
-            })
-
-            stellata.database.execute(self.up)
+            db.execute(self.up)
 
     def tearDown(self):
         if self.down:
-            stellata.database.execute(self.down)
+            db.execute(self.down)

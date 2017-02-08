@@ -1,3 +1,5 @@
+from typing import Union
+
 import collections
 import stellata.database
 import stellata.relations
@@ -9,7 +11,7 @@ class Query:
     A query is essentially a container for various Expression types, which serialize themselves to SQL.
     """
 
-    def __init__(self, model, joins=None, where=None, order=None):
+    def __init__(self, model: type, database=None, joins=None, where=None, order=None):
         if joins is None:
             joins = []
 
@@ -17,6 +19,7 @@ class Query:
             joins = [joins]
 
         self.model = model
+        self.database = database
         self.joins = joins
         self.where_expression = where
         self.order_expression = order
@@ -28,7 +31,56 @@ class Query:
 
         return (query, where_values)
 
-    def _row_to_object(self, model, row):
+    def _field_aliases(self, model=None):
+        # use query model by default
+        if not model:
+            model = self.model
+
+        # return a list of fields with aliases that can be used in a SQL query
+        return [
+            '"%s"."%s" as "%s.%s"' % (model.__table__, column, model.__table__, column)
+            for column in model.__fields__
+        ]
+
+    def _insert_query(self, data: Union[list, dict], unique=None, one=False):
+        # construct list of field names and placeholders for escaped values
+        columns = list(data[0].keys())
+        fields = ' (%s)' % ','.join(sorted(columns))
+        values = ' values ' + ','.join([
+            '(%s)' % ','.join(['%s'] * len(data[0]))
+        ] * len(data))
+        args = [i[1] for j in data for i in sorted(j.items())]
+
+        # handle unique indexes
+        unique_string = ''
+        if unique:
+            # if no columns are given, then update all columns
+            unique_columns = unique
+            if not isinstance(unique_columns, tuple) and not isinstance(unique_columns, list):
+                unique_columns = [unique_columns]
+
+            update_columns = columns
+            if isinstance(unique, dict):
+                unique_columns = unique['columns']
+                update_columns = unique.get('update', [])
+
+            unique_string = ' on conflict (%s) do update set %s' % (
+                ','.join(unique_columns),
+                ', '.join(['%s = excluded.%s' % (column, column) for column in update_columns])
+            )
+
+        # concatenate query parts and execute
+        returning = ' returning %s' % ','.join(self._field_aliases())
+        sql = 'insert into "' + self.model.__table__ + '"' + fields + values + unique_string + returning
+        return (sql, args)
+
+    def _pool(self):
+        if self.database:
+            return self.database
+
+        return stellata.database.pool
+
+    def _row_to_object(self, model: 'stellata.model.Model', row):
         empty = True
         data = {}
 
@@ -46,19 +98,12 @@ class Query:
         return model(**data)
 
     def _select_query(self):
-        # get list of columns to be selected from database
-        columns = [
-            '"%s"."%s" as "%s.%s"' % (self.model.__table__, column, self.model.__table__, column)
-            for column in self.model.__fields__
-        ]
+        columns = self._field_aliases()
 
         # add each join to the list of columns to select
         for join in self.joins:
             child = join.child()
-            columns += [
-                '"%s"."%s" as "%s.%s"' % (child.model.__table__, column, child.model.__table__, column)
-                for column in child.model.__fields__
-            ]
+            columns += self._field_aliases(child.model)
 
         # base select query
         query = 'select %s from "%s" ' % (','.join(columns), self.model.__table__)
@@ -78,7 +123,7 @@ class Query:
 
         return (query, where_values)
 
-    def _update_query(self, set_values):
+    def _update_query(self, set_values: dict):
         values = []
         query = 'update "%s" ' % self.model.__table__
 
@@ -91,23 +136,36 @@ class Query:
         values += where_values
 
         # return all data from updated objects, so caller can determine which rows where changed
-        returning = [
-            '"%s"."%s" as "%s.%s"' % (self.model.__table__, column, self.model.__table__, column)
-            for column in self.model.__fields__
-        ]
-
-        query += ','.join(returning)
+        query += ','.join(self._field_aliases())
         return (query, values)
+
+    def create(self, data: Union[dict, list], unique=None):
+        # accept both a list and single dictionary as an argument
+        one = False
+        if not isinstance(data, list):
+            data = [data]
+            one = True
+
+        if len(data) == 0:
+            return
+
+        # run insert query and get result, which will have any defaults added as well
+        query, values = self._insert_query(data, unique, one)
+        result = [self._row_to_object(self.model, row) for row in self._pool().query(query, values)]
+
+        if one and len(result) > 0:
+            return result[0]
+        return result
 
     def delete(self):
         query, values = self._delete_query()
-        stellata.database.execute(query, values)
+        self._pool().execute(query, values)
 
     def get(self):
         result = []
         created = {}
         query, values = self._select_query()
-        rows = stellata.database.query(query, values)
+        rows = self._pool().query(query, values)
 
         # if we don't have any joins, then we're done
         if not self.joins:
@@ -142,8 +200,6 @@ class Query:
                 stack.append(child)
 
         # do a post-order DFS on the directed graph to order joins from leaf to root
-        join_order = []
-        explored = set()
         def _build_join_order(adjacency_list, root, join_order, explored):
             if root in adjacency_list and root not in explored:
                 for child in adjacency_list[root]:
@@ -152,6 +208,8 @@ class Query:
             explored.add(root)
             join_order.append(root)
 
+        join_order = []
+        explored = set()
         _build_join_order(adjacency_list, root, join_order, explored)
 
         # iterate over joins in order from leaf nodes to root node
@@ -230,20 +288,24 @@ class Query:
         # final result is stored at the key representing the root model
         return list(data[parent_key].values())
 
-    def join(self, relation):
+    def join(self, relation: 'stellata.relation.Relation'):
         self.joins.append(JoinExpression(relation))
         return self
 
-    def order(self, fields, order=None):
+    def on(self, database: 'stellata.database.Pool'):
+        self.database = database
+        return self
+
+    def order(self, fields: list, order=None):
         self.order_expression = OrderByExpression(fields, order)
         return self
 
-    def update(self, set_values):
+    def update(self, set_values: dict):
         query, values = self._update_query(set_values)
-        rows = stellata.database.query(query, values)
+        rows = self._pool().query(query, values)
         return [self._row_to_object(self.model, row) for row in rows]
 
-    def where(self, expression):
+    def where(self, expression: 'Expression'):
         self.where_expression = expression
         return self
 
@@ -263,7 +325,7 @@ class JoinExpression(Expression):
     These expressions are chained via .join calls, so have no overloaded operators.
     """
 
-    def __init__(self, relation):
+    def __init__(self, relation: 'stellata.relation.Relation'):
         self.relation = relation
 
     def child(self):
@@ -287,7 +349,7 @@ class JoinExpression(Expression):
 class OrderByExpression(Expression):
     """Expression containing a list of ORDER BY clauses."""
 
-    def __init__(self, fields, order):
+    def __init__(self, fields: Union[list, 'stellata.field.Field'], order: str):
         if not isinstance(fields, list):
             fields = [fields]
 
@@ -307,7 +369,7 @@ class SingleColumnExpression(Expression):
     OR-ing or AND-ing two SingleColumnExpressions produces a MultiColumnExpression.
     """
 
-    def __init__(self, model, column: str, comparison: str, value):
+    def __init__(self, model: 'stellata.model.Model', column: str, comparison: str, value: Union[int, str, bool]):
         self.model = model
         self.column = column
         self.comparison = comparison
@@ -340,7 +402,7 @@ class MultiColumnExpression(Expression):
     OR-ing or AND-ing two MultiColumnExpressions produces a MultiColumnExpression.
     """
 
-    def __init__(self, model, left: Expression, right: Expression, operator: str):
+    def __init__(self, model: 'stellata.model.Model', left: Expression, right: Expression, operator: str):
         self.model = model
         self.left = left
         self.right = right

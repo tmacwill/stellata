@@ -4,6 +4,8 @@ import stellata.model
 import stellata.relations
 import stellata.tests.base
 
+db = stellata.tests.base.db
+
 class A(stellata.model.Model):
     __table__ = 'a'
 
@@ -35,6 +37,30 @@ class D(stellata.model.Model):
 
     id = stellata.fields.UUID()
     c_id = stellata.fields.UUID()
+
+class TestCreateQuery(stellata.tests.base.Base):
+    @stellata.tests.base.mock_query()
+    def test_single(self, query):
+        A.create({A.id.column: 5, A.foo.column: 'foo'})
+        query.assert_called_with(
+            'insert into "a" (foo,id) values (%s,%s) returning "a"."id" as "a.id","a"."foo" as "a.foo"',
+            ['foo', 5]
+        )
+
+    @stellata.tests.base.mock_query()
+    def test_multi(self, query):
+        A.create([{
+            A.id.column: 1,
+            A.foo.column: 'foo'
+        }, {
+            A.id.column: 2,
+            A.foo.column: 'bar'
+        }])
+
+        query.assert_called_with(
+            'insert into "a" (foo,id) values (%s,%s),(%s,%s) returning "a"."id" as "a.id","a"."foo" as "a.foo"',
+            ['foo', 1, 'bar', 2]
+        )
 
 class TestDeleteQuery(stellata.tests.base.Base):
     @stellata.tests.base.mock_execute()
@@ -153,7 +179,7 @@ class DatabaseTest(stellata.tests.base.Base):
 
     def setUp(self):
         super().setUp()
-        stellata.database.execute('''
+        db.execute('''
             insert into a
                 (id, foo)
             values
@@ -186,7 +212,7 @@ class DatabaseTest(stellata.tests.base.Base):
 class TestDelete(DatabaseTest):
     def test_where(self):
         A.where(A.foo == 'bar').delete()
-        result = stellata.database.query('''select * from a where foo = 'bar' ''')
+        result = db.query('''select * from a where foo = 'bar' ''')
         self.assertEqual(len(result), 0)
 
 class TestGet(DatabaseTest):
@@ -227,10 +253,10 @@ class TestUpdate(DatabaseTest):
         self.assertEqual(result[0].id, '31be0c81-f5ee-49b9-a624-356402427f76')
         self.assertEqual(result[0].foo, 'qux')
 
-        result = stellata.database.query('''select * from a where foo = 'bar' ''')
+        result = db.query('''select * from a where foo = 'bar' ''')
         self.assertEqual(len(result), 0)
 
-        result = stellata.database.query('''select * from a where foo = 'qux' ''')
+        result = db.query('''select * from a where foo = 'qux' ''')
         self.assertEqual(len(result), 1)
 
 class TestJoin(DatabaseTest):
