@@ -31,14 +31,17 @@ class Query:
 
         return (query, where_values)
 
-    def _field_aliases(self, model=None):
+    def _field_aliases(self, model=None, alias=None):
         # use query model by default
         if not model:
             model = self.model
 
+        if not alias:
+            alias = model.__table__
+
         # return a list of fields with aliases that can be used in a SQL query
         return [
-            '"%s"."%s" as "%s.%s"' % (model.__table__, column, model.__table__, column)
+            '"%s"."%s" as "%s.%s"' % (alias, column, alias, column)
             for column in model.__fields__
         ]
 
@@ -80,13 +83,15 @@ class Query:
 
         return stellata.database.pool
 
-    def _row_to_object(self, model: 'stellata.model.Model', row):
+    def _row_to_object(self, model: 'stellata.model.Model', row, alias=None):
         empty = True
         data = {}
+        if not alias:
+            alias = model.__table__
 
         # iterate over fields defined in the model and extract them from the row dict
         for column in model.__fields__:
-            value = row['%s.%s' % (model.__table__, column)]
+            value = row['%s.%s' % (alias, column)]
             data[column] = value
             if value is not None:
                 empty = False
@@ -103,7 +108,7 @@ class Query:
         # add each join to the list of columns to select
         for join in self.joins:
             child = join.child()
-            columns += self._field_aliases(child.model)
+            columns += self._field_aliases(child.model, join.relation.column)
 
         # base select query
         query = 'select %s from "%s" ' % (','.join(columns), self.model.__table__)
@@ -192,6 +197,9 @@ class Query:
         explored = set()
         while len(stack) > 0:
             root = stack.pop()
+            if root in explored:
+                continue
+
             explored.add(root)
             if root not in reversed_adjacency_list:
                 break
@@ -205,8 +213,9 @@ class Query:
                 for child in adjacency_list[root]:
                     _build_join_order(adjacency_list, child, join_order, explored)
 
+            if root not in explored:
+                join_order.append(root)
             explored.add(root)
-            join_order.append(root)
 
         join_order = []
         explored = set()
@@ -223,9 +232,7 @@ class Query:
                 child_model = relation.child().model
                 child_column = relation.child().column
 
-                # map table names to attribute names so both parent/child models can use the same key
                 many = isinstance(relation, stellata.relations.HasMany)
-                aliases[child_model.__table__] = relation.column
                 visited = set()
                 for row in rows:
                     # for each join, insert into a table that maps models to their descendents.
@@ -239,16 +246,19 @@ class Query:
                     parent_value = row[parent_key]
 
                     data.setdefault(parent_key, {})
-                    data[parent_key].setdefault(parent_value, {})
+                    data[parent_key].setdefault(parent_value, None)
 
                     # convert row to model objects, since that's what we'll ultimately return
+                    alias = relation.column
+                    child_row = self._row_to_object(child_model, row, alias)
                     parent_row = self._row_to_object(parent_model, row)
-                    child_row = self._row_to_object(child_model, row)
-                    alias = aliases[child_model.__table__]
+                    if data.get(parent_key, {}).get(parent_value):
+                        parent_row = data[parent_key][parent_value]
 
                     # get values stored for this row and alias
                     v = [] if many else None
-                    if hasattr(data[parent_key][parent_value], alias):
+                    if hasattr(data[parent_key][parent_value], alias) and \
+                            not isinstance(getattr(data[parent_key][parent_value], alias), stellata.relation.Relation):
                         v = getattr(data[parent_key][parent_value], alias)
 
                     # since joins are left joins, skip rows that are empty for the current join
@@ -338,11 +348,12 @@ class JoinExpression(Expression):
         parent = self.parent()
         child = self.child()
 
-        return 'left join "%s" on "%s"."%s" = "%s"."%s"' % (
+        return 'left join "%s" as "%s" on "%s"."%s" = "%s"."%s"' % (
             child.model.__table__,
+            self.relation.column,
             parent.model.__table__,
             parent.column,
-            child.model.__table__,
+            self.relation.column,
             child.column
         )
 

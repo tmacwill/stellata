@@ -38,6 +38,16 @@ class D(stellata.model.Model):
     id = stellata.fields.UUID()
     c_id = stellata.fields.UUID()
 
+class E(stellata.model.Model):
+    __table__ = 'e'
+
+    id = stellata.fields.UUID()
+    d1_id = stellata.fields.UUID()
+    d2_id = stellata.fields.UUID()
+
+    d1 = stellata.relations.BelongsTo(lambda: (D.id, E.d1_id))
+    d2 = stellata.relations.BelongsTo(lambda: (D.id, E.d2_id))
+
 class TestCreateQuery(stellata.tests.base.Base):
     @stellata.tests.base.mock_query()
     def test_single(self, query):
@@ -116,7 +126,7 @@ class TestJoinQuery(stellata.tests.base.Base):
         A.join(A.b).where(A.id == 1).get()
         query.assert_called_with(
             'select "a"."id" as "a.id","a"."foo" as "a.foo","b"."id" as "b.id","b"."a_id" as "b.a_id" '
-            'from "a" left join "b" on "a"."id" = "b"."a_id" where "a"."id" = %s',
+            'from "a" left join "b" as "b" on "a"."id" = "b"."a_id" where "a"."id" = %s',
             [1]
         )
 
@@ -125,8 +135,8 @@ class TestJoinQuery(stellata.tests.base.Base):
         A.join(A.b).join(B.c).where(A.id == 1).get()
         query.assert_called_with(
             'select "a"."id" as "a.id","a"."foo" as "a.foo","b"."id" as "b.id","b"."a_id" as "b.a_id",'
-            '"c"."id" as "c.id","c"."b_id" as "c.b_id" from "a" left join "b" on "a"."id" = "b"."a_id" '
-            'left join "c" on "b"."id" = "c"."b_id" where "a"."id" = %s',
+            '"c"."id" as "c.id","c"."b_id" as "c.b_id" from "a" left join "b" as "b" on "a"."id" = "b"."a_id" '
+            'left join "c" as "c" on "b"."id" = "c"."b_id" where "a"."id" = %s',
             [1]
         )
 
@@ -168,6 +178,12 @@ class DatabaseTest(stellata.tests.base.Base):
         id uuid not null default uuid_generate_v1mc(),
         c_id uuid not null
     );
+
+    create table if not exists e (
+        id uuid not null default uuid_generate_v1mc(),
+        d1_id uuid not null,
+        d2_id uuid not null
+    );
     '''
 
     down = '''
@@ -175,6 +191,7 @@ class DatabaseTest(stellata.tests.base.Base):
     drop table b;
     drop table c;
     drop table d;
+    drop table e;
     '''
 
     def setUp(self):
@@ -205,7 +222,15 @@ class DatabaseTest(stellata.tests.base.Base):
             insert into d
                 (id, c_id)
             values
-                ('5e0954fc-2f2f-4a63-9665-3fdf033f5ef5', '8fd3bec1-e8b9-4e8c-a7e8-3d47152d4e56')
+                ('5e0954fc-2f2f-4a63-9665-3fdf033f5ef5', '8fd3bec1-e8b9-4e8c-a7e8-3d47152d4e56'),
+                ('0dd535d3-2c0e-4dfc-aa3a-9f57c1c2a4c6', 'cf28adf1-bdaa-4a37-9175-a0676ff9d6c5')
+            ;
+
+            insert into e
+                (id, d1_id, d2_id)
+            values
+                ('9eb774ca-62ac-4455-b489-2b0b585f5dd5', '5e0954fc-2f2f-4a63-9665-3fdf033f5ef5',
+                    '0dd535d3-2c0e-4dfc-aa3a-9f57c1c2a4c6')
             ;
         ''')
 
@@ -281,6 +306,12 @@ class TestJoin(DatabaseTest):
         self.assertEqual(result[0].b.a.id, '31be0c81-f5ee-49b9-a624-356402427f76')
         self.assertEqual(result[1].b.a.id, '31be0c81-f5ee-49b9-a624-356402427f76')
 
+    def test_belongs_to_multi(self):
+        result = E.join(E.d1).join(E.d2).get()
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].d1.id, '5e0954fc-2f2f-4a63-9665-3fdf033f5ef5')
+        self.assertEqual(result[0].d2.id, '0dd535d3-2c0e-4dfc-aa3a-9f57c1c2a4c6')
+
     def test_has_many(self):
         result = A.order(A.id).join(A.b).get()
         self.assertEqual(len(result), 2)
@@ -309,6 +340,16 @@ class TestJoin(DatabaseTest):
         self.assertEqual(len(result), 2)
         self.assertEqual(result[0].d.id, '5e0954fc-2f2f-4a63-9665-3fdf033f5ef5')
         self.assertEqual(result[1].d, None)
+
+    def test_multi(self):
+        result = B.order(B.id).join(B.a).join(B.c).get()
+        self.assertEqual(len(result), 3)
+        self.assertEqual(result[0].a.id, '31be0c81-f5ee-49b9-a624-356402427f76')
+        self.assertEqual(len(result[0].c), 2)
+        self.assertEqual(result[1].a.id, '2a12f545-c587-4b99-8fd2-57e79f7c8bca')
+        self.assertEqual(len(result[1].c), 0)
+        self.assertEqual(result[2].a.id, '31be0c81-f5ee-49b9-a624-356402427f76')
+        self.assertEqual(len(result[2].c), 0)
 
     def test_where(self):
         result = A.join(A.b).where(A.id == '31be0c81-f5ee-49b9-a624-356402427f76').get()
