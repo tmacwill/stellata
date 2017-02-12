@@ -8,9 +8,10 @@ class Field:
     Fields correspond to database columns.
     """
 
-    def __init__(self, column=None, model=None):
-        self.column = column
-        self.model = model
+    def __init__(self, length=None, null=True, default=None):
+        self.length = length
+        self.null = null
+        self.default = default
 
     def __eq__(self, value: Union[int, str, float]):
         return stellata.query.SingleColumnExpression(self.model, self.column, '=', value)

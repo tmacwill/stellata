@@ -41,8 +41,8 @@ class Query:
 
         # return a list of fields with aliases that can be used in a SQL query
         return [
-            '"%s"."%s" as "%s.%s"' % (alias, column, alias, column)
-            for column in model.__fields__
+            '"%s"."%s" as "%s.%s"' % (alias, field.column, alias, field.column)
+            for field in model.__fields__
         ]
 
     def _insert_query(self, data: Union[list, dict], unique=None, one=False):
@@ -90,9 +90,9 @@ class Query:
             alias = model.__table__
 
         # iterate over fields defined in the model and extract them from the row dict
-        for column in model.__fields__:
-            value = row['%s.%s' % (alias, column)]
-            data[column] = value
+        for field in model.__fields__:
+            value = row['%s.%s' % (alias, field.column)]
+            data[field.column] = value
             if value is not None:
                 empty = False
 

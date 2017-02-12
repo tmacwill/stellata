@@ -11,6 +11,8 @@ import stellata.field
 import stellata.relation
 import stellata.query
 
+_models = []
+
 class ModelType(type):
     """Metaclass for models.
 
@@ -18,6 +20,8 @@ class ModelType(type):
     """
 
     def __new__(cls, name, bases, namespace, **kwargs):
+        global _models
+
         namespace['__fields__'] = []
         namespace['__relations__'] = []
 
@@ -33,7 +37,7 @@ class ModelType(type):
                 field.model = class_instance
 
                 # store all fields defined on the model so we can serialize later
-                namespace['__fields__'].append(column)
+                namespace['__fields__'].append(field)
 
             if isinstance(field, stellata.relation.Relation):
                 # store the lvalue of the relation definition in the relation itself so we can reference it in queries
@@ -46,6 +50,7 @@ class ModelType(type):
                 # store all relations defined on the model so we can go from model -> relation in joins
                 namespace['__relations__'].append(field)
 
+        _models.append(class_instance)
         return class_instance
 
 class Model(metaclass=ModelType):
@@ -53,6 +58,9 @@ class Model(metaclass=ModelType):
 
     Each model corresponds to a database table.
     """
+
+    __table__ = None
+    __database__ = None
 
     def __init__(self, *args, **kwargs):
         for k, v in kwargs.items():
