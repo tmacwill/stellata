@@ -8,6 +8,7 @@ import re
 
 import stellata.database
 import stellata.field
+import stellata.index
 import stellata.relation
 import stellata.query
 
@@ -23,6 +24,7 @@ class ModelType(type):
         global _models
 
         namespace['__fields__'] = []
+        namespace['__indexes__'] = []
         namespace['__relations__'] = []
 
         class_instance = super().__new__(cls, name, bases, namespace)
@@ -49,6 +51,17 @@ class ModelType(type):
 
                 # store all relations defined on the model so we can go from model -> relation in joins
                 namespace['__relations__'].append(field)
+
+            if isinstance(field, stellata.index.Index):
+                # store the lvalue of the relation definition in the relation itself so we can reference it in queries
+                # for example, if we have `i = Index()`, then we have `i.column == 'i'`
+                field.column = column
+
+                # store the model class so instances can be created from queries
+                field.model = class_instance
+
+                # store all relations defined on the model so we can go from model -> relation in joins
+                namespace['__indexes__'].append(field)
 
         _models.append(class_instance)
         return class_instance

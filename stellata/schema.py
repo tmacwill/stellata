@@ -1,35 +1,34 @@
+import re
 import stellata.database
 import stellata.model
 
-def _alter_table_string(table, field, primary_key=False, create=False):
+def _alter_table_string(field, primary_key=False, create=False):
     result = []
 
+    alter = 'alter table "%s"' % field.model.__table__
     if create:
+        prefix = '%s add column "%s"' % (alter, field.column)
         if field.length:
-            result.append(
-                'alter table "%s" add column "%s" %s (%s) ;' %
-                (table, field.column, field.column_type, field.length)
-            )
+            result.append('%s %s (%s) ;' % (prefix, field.column_type, field.length))
         else:
-            result.append('alter table "%s" add column "%s" %s ;' % (table, field.column, field.column_type))
+            result.append('%s %s ;' % (prefix, field.column_type))
     else:
+        prefix = '%s alter column "%s" type %s' % (alter, field.column, field.column_type)
         if field.length:
-            result.append(
-                'alter table "%s" alter column "%s" type %s (%s) ;' %
-                (table, field.column, field.column_type, field.length)
-            )
+            result.append('%s (%s) ;' % (prefix, field.length))
         else:
-            result.append('alter table "%s" alter column "%s" type %s ;' % (table, field.column, field.column_type))
+            result.append('%s ;' % prefix)
 
+    alter += ' alter column "%s"' % field.column
     if field.null:
-        result.append('alter table "%s" alter column "%s" drop not null ;' % (table, field.column))
+        result.append('%s drop not null ;' % alter)
     else:
-        result.append('alter table "%s" alter column "%s" set not null ;' % (table, field.column))
+        result.append('%s set not null ;' % alter)
 
     if field.default:
-        result.append('alter table "%s" alter column "%s" set default %s ;' % (table, field.column, field.default))
+        result.append('%s set default %s ;' % (alter, field.default))
     else:
-        result.append('alter table "%s" alter column "%s" drop default ;' % (table, field.column))
+        result.append('%s drop default ;' % alter)
 
     return result
 
@@ -46,18 +45,124 @@ def _handle(database, statements, execute, quiet):
 
     return statements
 
-def migrate(database=None, models=None, execute=False, quiet=False):
-    if not database:
-        database = stellata.database.pool
+def _index_name(index):
+    return '%s__%s' % (index.model.__table__, index.column)
 
-    if not models:
-        models = stellata.model._models
+def _index_string(index):
+    sql = 'create '
+    if index.unique:
+        sql += 'unique '
 
+    sql += 'index "%s" on "%s" using btree (%s)' % (
+        _index_name(index),
+        index.model.__table__,
+        ', '.join([e.column for e in index.fields()])
+    )
+
+    return sql
+
+def _migrate_indexes(database, models, execute, quiet):
+    result = []
+    for model in models:
+        # get the primary key for the table
+        sql = '''
+            select
+                tablename,
+                indexname,
+                indexdef
+            from pg_indexes where
+                tablename = '%s' and
+                indexname like '%%_pkey'
+        ''' % model.__table__
+        schema = database.query(sql)
+
+        # handle primary keys first
+        primary_keys_match = False
+        model_has_primary_key = False
+        database_has_primary_key = len(schema) > 0
+        index_columns = None
+        for index in model.__indexes__:
+            if isinstance(index, stellata.index.PrimaryKey):
+                model_has_primary_key = True
+                # check if columns on primary key match columns defined on index
+                index_columns = ','.join([e.column for e in index.fields()])
+                if len(schema) > 0:
+                    table, index, definition = schema[0]
+                    if re.search('\(%s\)' % index_columns, definition):
+                        primary_keys_match = True
+
+        if database_has_primary_key and not model_has_primary_key:
+            result.append('alter table %s drop constraint if exists %s_pkey ;' % (model.__table__, model.__table__))
+        if not database_has_primary_key and model_has_primary_key:
+            result.append(
+                'alter table %s add primary key (%s) ;' %
+                (model.__table__, index_columns)
+            )
+        elif not primary_keys_match and index_columns:
+            result.append('alter table %s drop constraint if exists %s_pkey ;' % (model.__table__, model.__table__))
+            result.append(
+                'alter table %s add primary key (%s) ;' %
+                (model.__table__, index_columns)
+            )
+
+        # get indexes that currently exist for table, excluding primary key
+        sql = '''
+            select
+                tablename,
+                indexname,
+                indexdef
+            from pg_indexes where
+                tablename = '%s' and
+                indexname not like '%%_pkey'
+        ''' % model.__table__
+        schema = database.query(sql)
+
+        # get all indexes that should exist in database, skipping primary keys
+        defined_indexes = []
+        defined_index_names = set()
+        for index in model.__indexes__:
+            if isinstance(index, stellata.index.PrimaryKey):
+                continue
+
+            defined_indexes.append(index)
+            defined_index_names.add(_index_name(index))
+
+        # make sure all existing indexes match the types defined by models
+        existing_indexes = set()
+        for existing_index in schema:
+            table, index_name, definition = existing_index
+            existing_indexes.add(index_name)
+
+            for defined_index in defined_indexes:
+                if _index_name(defined_index) == index_name:
+                    index_string = _index_string(defined_index)
+
+                    # if definitions don't match, then drop index and re-create
+                    if index_string.lower().replace('"', '') != definition.lower().replace('"', ''):
+                        result.append(_handle(database, 'drop index "%s" ;' % index_name, execute, quiet))
+                        result.append(_handle(database, '%s ;' % index_string, execute, quiet))
+
+        # drop indexes that are no longer needed
+        unused_indexes = existing_indexes - defined_index_names
+        for unused_index in unused_indexes:
+            result.append(_handle(database, 'drop index "%s" ;' % unused_index, execute, quiet))
+
+        # add indexes that are missing
+        missing_indexes = defined_index_names - existing_indexes
+        for missing_index in missing_indexes:
+            for defined_index in defined_indexes:
+                if missing_index == _index_name(defined_index):
+                    result.append(_handle(database, '%s ;' % _index_string(defined_index), execute, quiet))
+
+    return result
+
+def _migrate_tables(database, models, execute, quiet):
     result = []
     for model in models:
         if not hasattr(model, '__table__') or not model.__table__:
             continue
 
+        # get columns that currently exist for table
         sql = '''
             select
                 column_name,
@@ -68,13 +173,13 @@ def migrate(database=None, models=None, execute=False, quiet=False):
             from information_schema.columns where
                 table_name = '%s';
         ''' % model.__table__
+        schema = database.query(sql)
 
         # if table doesn't exist in schema, then it needs to be created
-        schema = database.query(sql)
         if len(schema) == 0:
             result.append(_handle(database, 'create table "%s" () ;' % model.__table__, execute, quiet))
 
-        existing_columns = set()
+        # get all columns that should exist in the database
         defined_columns = set()
         defined_fields = []
         for field in model.__fields__:
@@ -95,7 +200,8 @@ def migrate(database=None, models=None, execute=False, quiet=False):
                 defined_fields.insert(1, field)
                 break
 
-        # make sure column types match
+        # for each column that exists in the database, make sure it's metadata matches models
+        existing_columns = set()
         for existing_column in schema:
             column_name, column_type, length, default, null = existing_column
             existing_columns.add(column_name)
@@ -107,12 +213,7 @@ def migrate(database=None, models=None, execute=False, quiet=False):
                             default != field.default or \
                             (null == 'YES' and not field.null) or \
                             (null == 'NO' and field.null):
-                        result += _handle(
-                            database,
-                            _alter_table_string(model.__table__, field),
-                            execute,
-                            quiet
-                        )
+                        result += _handle(database, _alter_table_string(field), execute, quiet)
 
         # drop columns that are no longer needed
         unused_columns = existing_columns - defined_columns
@@ -128,11 +229,18 @@ def migrate(database=None, models=None, execute=False, quiet=False):
         missing_columns = defined_columns - existing_columns
         for field in defined_fields:
             if field.column in missing_columns:
-                result += _handle(
-                    database,
-                    _alter_table_string(model.__table__, field, create=True),
-                    execute,
-                    quiet
-                )
+                result += _handle(database, _alter_table_string(field, create=True), execute, quiet)
 
+    return result
+
+def migrate(database=None, models=None, execute=False, quiet=False):
+    if not database:
+        database = stellata.database.pool
+
+    if not models:
+        models = stellata.model._models
+
+    result = []
+    result.extend(_migrate_tables(database, models, execute, quiet))
+    result.extend(_migrate_indexes(database, models, execute, quiet))
     return result

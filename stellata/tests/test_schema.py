@@ -1,5 +1,6 @@
 import stellata.database
 import stellata.fields
+import stellata.index
 import stellata.schema
 import stellata.tests.base
 
@@ -11,6 +12,9 @@ class A(stellata.model.Model):
     id = stellata.fields.UUID(null=False)
     foo = stellata.fields.Text()
 
+    foo_index = stellata.index.Index(lambda: A.foo)
+    primary_key = stellata.index.PrimaryKey(lambda: A.id)
+
 class B(stellata.model.Model):
     __table__ = 'b'
 
@@ -18,14 +22,19 @@ class B(stellata.model.Model):
     bar = stellata.fields.Integer()
     baz = stellata.fields.Varchar(length=255)
 
+    bar_baz_index = stellata.index.Index(lambda: (B.bar, B.baz), unique=True)
+
 class Base(stellata.tests.base.Base):
     down = '''
     drop table if exists a;
     drop table if exists b;
+    drop index if exists a__foo_index;
+    drop index if exists b__bar_baz_index;
     '''
 
     def test(self):
-        return stellata.schema.migrate(db, models=[A, B], quiet=True)
+        result = stellata.schema.migrate(db, models=[A, B], quiet=True)
+        return result
 
 class TestEmpty(Base):
     def test(self):
@@ -47,13 +56,16 @@ class TestEmpty(Base):
             'alter table "b" alter column "bar" drop default ;',
             'alter table "b" add column "baz" character varying (255) ;',
             'alter table "b" alter column "baz" drop not null ;',
-            'alter table "b" alter column "baz" drop default ;'
+            'alter table "b" alter column "baz" drop default ;',
+            'alter table a add primary key (id) ;',
+            'create index "a__foo_index" on "a" using btree (foo) ;',
+            'create unique index "b__bar_baz_index" on "b" using btree (bar, baz) ;'
         ])
 
 class TestExtraColumns(Base):
     up = '''
     create table if not exists a (
-        id uuid default uuid_generate_v1mc() not null,
+        id uuid default uuid_generate_v1mc() not null primary key,
         foo text,
         foobar integer
     );
@@ -64,6 +76,9 @@ class TestExtraColumns(Base):
         baz character varying (255),
         barfoo text
     );
+
+    create index if not exists "a__foo_index" on "a" using btree (foo) ;
+    create unique index if not exists "b__bar_baz_index" on "b" using btree (bar, baz) ;
     '''
 
     def test(self):
@@ -73,10 +88,55 @@ class TestExtraColumns(Base):
             'alter table "b" drop column "barfoo" ;'
         ])
 
+class TestExtraIndex(Base):
+    up = '''
+    create table if not exists a (
+        id uuid default uuid_generate_v1mc() not null primary key,
+        foo text
+    );
+
+    create table if not exists b (
+        id uuid default uuid_generate_v1mc() not null,
+        bar integer,
+        baz character varying (255)
+    );
+
+    create index if not exists "a__foo_index" on "a" using btree (foo) ;
+    create unique index if not exists "b__bar_baz_index" on "b" using btree (bar, baz) ;
+    create index if not exists "b__id_bar_baz_index" on "b" using btree (id, bar, baz) ;
+    '''
+
+    def test(self):
+        result = super().test()
+        self.assertEqual(result, ['drop index "b__id_bar_baz_index" ;'])
+
+class TestExtraPrimaryKey(Base):
+    up = '''
+    create table if not exists a (
+        id uuid default uuid_generate_v1mc() not null primary key,
+        foo text
+    );
+
+    create table if not exists b (
+        id uuid default uuid_generate_v1mc() not null primary key,
+        bar integer,
+        baz character varying (255)
+    );
+
+    create index if not exists "a__foo_index" on "a" using btree (foo) ;
+    create unique index if not exists "b__bar_baz_index" on "b" using btree (bar, baz) ;
+    '''
+
+    def test(self):
+        result = super().test()
+        self.assertEqual(result, [
+            'alter table b drop constraint if exists b_pkey ;',
+        ])
+
 class TestMissingColumns(Base):
     up = '''
     create table if not exists a (
-        id uuid default uuid_generate_v1mc() not null
+        id uuid default uuid_generate_v1mc() not null primary key
     );
 
     create table if not exists b (
@@ -95,15 +155,63 @@ class TestMissingColumns(Base):
             'alter table "b" alter column "bar" drop default ;',
             'alter table "b" add column "baz" character varying (255) ;',
             'alter table "b" alter column "baz" drop not null ;',
-            'alter table "b" alter column "baz" drop default ;'
+            'alter table "b" alter column "baz" drop default ;',
+            'create index "a__foo_index" on "a" using btree (foo) ;',
+            'create unique index "b__bar_baz_index" on "b" using btree (bar, baz) ;'
         ])
 
-class TestMissingTable(Base):
+class TestMissingIndex(Base):
+    up = '''
+    create table if not exists a (
+        id uuid default uuid_generate_v1mc() not null primary key,
+        foo text
+    );
+
+    create table if not exists b (
+        id uuid default uuid_generate_v1mc() not null,
+        bar integer,
+        baz character varying (255)
+    );
+    '''
+
+    def test(self):
+        result = super().test()
+        self.assertEqual(result, [
+            'create index "a__foo_index" on "a" using btree (foo) ;',
+            'create unique index "b__bar_baz_index" on "b" using btree (bar, baz) ;'
+        ])
+
+class TestMissingPrimaryKey(Base):
     up = '''
     create table if not exists a (
         id uuid default uuid_generate_v1mc() not null,
         foo text
     );
+
+    create table if not exists b (
+        id uuid default uuid_generate_v1mc() not null,
+        bar integer,
+        baz character varying (255)
+    );
+
+    create index if not exists "a__foo_index" on "a" using btree (foo) ;
+    create unique index if not exists "b__bar_baz_index" on "b" using btree (bar, baz) ;
+    '''
+
+    def test(self):
+        result = super().test()
+        self.assertEqual(result, [
+            'alter table a add primary key (id) ;'
+        ])
+
+class TestMissingTable(Base):
+    up = '''
+    create table if not exists a (
+        id uuid default uuid_generate_v1mc() not null primary key,
+        foo text
+    );
+
+    create index if not exists "a__foo_index" on "a" using btree (foo) ;
     '''
 
     def test(self):
@@ -118,13 +226,14 @@ class TestMissingTable(Base):
             'alter table "b" alter column "bar" drop default ;',
             'alter table "b" add column "baz" character varying (255) ;',
             'alter table "b" alter column "baz" drop not null ;',
-            'alter table "b" alter column "baz" drop default ;'
+            'alter table "b" alter column "baz" drop default ;',
+            'create unique index "b__bar_baz_index" on "b" using btree (bar, baz) ;'
         ])
 
 class TestModifyColumnDefault(Base):
     up = '''
     create table if not exists a (
-        id uuid not null,
+        id uuid not null primary key,
         foo text
     );
 
@@ -133,6 +242,9 @@ class TestModifyColumnDefault(Base):
         bar integer,
         baz character varying (255)
     );
+
+    create index if not exists "a__foo_index" on "a" using btree (foo) ;
+    create unique index if not exists "b__bar_baz_index" on "b" using btree (bar, baz) ;
     '''
 
     def test(self):
@@ -149,7 +261,7 @@ class TestModifyColumnDefault(Base):
 class TestModifyColumnLength(Base):
     up = '''
     create table if not exists a (
-        id uuid default uuid_generate_v1mc() not null,
+        id uuid default uuid_generate_v1mc() not null primary key,
         foo text
     );
 
@@ -158,6 +270,9 @@ class TestModifyColumnLength(Base):
         bar integer,
         baz character varying (5)
     );
+
+    create index if not exists "a__foo_index" on "a" using btree (foo) ;
+    create unique index if not exists "b__bar_baz_index" on "b" using btree (bar, baz) ;
     '''
 
     def test(self):
@@ -171,7 +286,7 @@ class TestModifyColumnLength(Base):
 class TestModifyColumnNull(Base):
     up = '''
     create table if not exists a (
-        id uuid default uuid_generate_v1mc(),
+        id uuid default uuid_generate_v1mc() not null primary key,
         foo text not null
     );
 
@@ -180,14 +295,14 @@ class TestModifyColumnNull(Base):
         bar integer not null,
         baz character varying (255)
     );
+
+    create index if not exists "a__foo_index" on "a" using btree (foo) ;
+    create unique index if not exists "b__bar_baz_index" on "b" using btree (bar, baz) ;
     '''
 
     def test(self):
         result = super().test()
         self.assertEqual(result, [
-            'alter table "a" alter column "id" type uuid ;',
-            'alter table "a" alter column "id" set not null ;',
-            'alter table "a" alter column "id" set default uuid_generate_v1mc() ;',
             'alter table "a" alter column "foo" type text ;',
             'alter table "a" alter column "foo" drop not null ;',
             'alter table "a" alter column "foo" drop default ;',
@@ -202,7 +317,7 @@ class TestModifyColumnNull(Base):
 class TestModifyColumnType(Base):
     up = '''
     create table if not exists a (
-        id uuid default uuid_generate_v1mc() not null,
+        id uuid default uuid_generate_v1mc() not null primary key,
         foo integer
     );
 
@@ -211,6 +326,9 @@ class TestModifyColumnType(Base):
         bar text,
         baz character varying (255)
     );
+
+    create index if not exists "a__foo_index" on "a" using btree (foo) ;
+    create unique index if not exists "b__bar_baz_index" on "b" using btree (bar, baz) ;
     '''
 
     def test(self):
@@ -224,10 +342,10 @@ class TestModifyColumnType(Base):
             'alter table "b" alter column "bar" drop default ;'
         ])
 
-class TestNoop(Base):
+class TestModifyIndex(Base):
     up = '''
     create table if not exists a (
-        id uuid default uuid_generate_v1mc() not null,
+        id uuid default uuid_generate_v1mc() not null primary key,
         foo text
     );
 
@@ -236,6 +354,35 @@ class TestNoop(Base):
         bar integer,
         baz character varying (255)
     );
+
+    create index if not exists "a__foo_index" on "a" using btree (id, foo) ;
+    create index if not exists "b__bar_baz_index" on "b" using btree (id, bar, baz) ;
+    '''
+
+    def test(self):
+        result = super().test()
+        self.assertEqual(result, [
+            'drop index "a__foo_index" ;',
+            'create index "a__foo_index" on "a" using btree (foo) ;',
+            'drop index "b__bar_baz_index" ;',
+            'create unique index "b__bar_baz_index" on "b" using btree (bar, baz) ;'
+        ])
+
+class TestNoop(Base):
+    up = '''
+    create table if not exists a (
+        id uuid default uuid_generate_v1mc() not null primary key,
+        foo text
+    );
+
+    create table if not exists b (
+        id uuid default uuid_generate_v1mc() not null,
+        bar integer,
+        baz character varying (255)
+    );
+
+    create index if not exists "a__foo_index" on "a" using btree (foo) ;
+    create unique index if not exists "b__bar_baz_index" on "b" using btree (bar, baz) ;
     '''
 
     def test(self):
