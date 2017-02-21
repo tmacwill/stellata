@@ -12,7 +12,8 @@ class A(stellata.model.Model):
     id = stellata.fields.UUID()
     foo = stellata.fields.Text()
 
-    b = stellata.relations.HasMany(lambda: (A.id, B.a_id))
+    # note: some attribute names intentionally mismatch tables to test that
+    b_has_many = stellata.relations.HasMany(lambda: (A.id, B.a_id))
 
 class B(stellata.model.Model):
     __table__ = 'b'
@@ -20,8 +21,8 @@ class B(stellata.model.Model):
     id = stellata.fields.UUID()
     a_id = stellata.fields.UUID()
 
-    a = stellata.relations.BelongsTo(lambda: (A.id, B.a_id))
-    c = stellata.relations.HasMany(lambda: C.b_id)
+    a_belongs_to = stellata.relations.BelongsTo(lambda: (A.id, B.a_id))
+    c_has_many = stellata.relations.HasMany(lambda: C.b_id)
 
 class C(stellata.model.Model):
     __table__ = 'c'
@@ -29,14 +30,17 @@ class C(stellata.model.Model):
     id = stellata.fields.UUID()
     b_id = stellata.fields.UUID()
 
-    b = stellata.relations.BelongsTo(lambda: (B.id, C.b_id, C.id))
-    d = stellata.relations.HasOne(lambda: (C.id, D.c_id))
+    b = stellata.relations.BelongsTo(lambda: (B.id, C.b_id), lambda: C.id)
+    d = stellata.relations.HasOne(lambda: (C.id, D.c_id), lambda: D.id)
 
 class D(stellata.model.Model):
     __table__ = 'd'
 
     id = stellata.fields.UUID()
+    b_id = stellata.fields.UUID()
     c_id = stellata.fields.UUID()
+
+    b_belongs_to = stellata.relations.BelongsTo(lambda: (B.id, D.b_id))
 
 class E(stellata.model.Model):
     __table__ = 'e'
@@ -123,20 +127,23 @@ class TestGetQuery(stellata.tests.base.Base):
 class TestJoinQuery(stellata.tests.base.Base):
     @stellata.tests.base.mock_query()
     def test_single(self, query):
-        A.join(A.b).where(A.id == 1).get()
+        A.join(A.b_has_many).where(A.id == 1).get()
         query.assert_called_with(
-            'select "a"."id" as "a.id","a"."foo" as "a.foo","b"."id" as "b.id","b"."a_id" as "b.a_id" '
-            'from "a" left join "b" as "b" on "a"."id" = "b"."a_id" where "a"."id" = %s',
+            'select "a"."id" as "a.id","a"."foo" as "a.foo","VAqPT"."id" as '
+            '"VAqPT.id","VAqPT"."a_id" as "VAqPT.a_id" from "a" left join "b" as '
+            '"VAqPT" on "a"."id" = "VAqPT"."a_id" where "a"."id" = %s',
             [1]
         )
 
     @stellata.tests.base.mock_query()
     def test_multi(self, query):
-        A.join(A.b).join(B.c).where(A.id == 1).get()
+        A.join(A.b_has_many).join(B.c_has_many).where(A.id == 1).get()
         query.assert_called_with(
-            'select "a"."id" as "a.id","a"."foo" as "a.foo","b"."id" as "b.id","b"."a_id" as "b.a_id",'
-            '"c"."id" as "c.id","c"."b_id" as "c.b_id" from "a" left join "b" as "b" on "a"."id" = "b"."a_id" '
-            'left join "c" as "c" on "b"."id" = "c"."b_id" where "a"."id" = %s',
+            'select "a"."id" as "a.id","a"."foo" as "a.foo","VAqPT"."id" as '
+            '"VAqPT.id","VAqPT"."a_id" as "VAqPT.a_id","KdIGW"."id" as '
+            '"KdIGW.id","KdIGW"."b_id" as "KdIGW.b_id" from "a" left join "b" as '
+            '"VAqPT" on "a"."id" = "VAqPT"."a_id" left join "c" as "KdIGW" on '
+            '"VAqPT"."id" = "KdIGW"."b_id" where "a"."id" = %s',
             [1]
         )
 
@@ -176,6 +183,7 @@ class DatabaseTest(stellata.tests.base.Base):
 
     create table if not exists d (
         id uuid not null default uuid_generate_v1mc(),
+        b_id uuid not null,
         c_id uuid not null
     );
 
@@ -220,10 +228,14 @@ class DatabaseTest(stellata.tests.base.Base):
             ;
 
             insert into d
-                (id, c_id)
+                (id, b_id, c_id)
             values
-                ('5e0954fc-2f2f-4a63-9665-3fdf033f5ef5', '8fd3bec1-e8b9-4e8c-a7e8-3d47152d4e56'),
-                ('0dd535d3-2c0e-4dfc-aa3a-9f57c1c2a4c6', 'cf28adf1-bdaa-4a37-9175-a0676ff9d6c5')
+                ('5e0954fc-2f2f-4a63-9665-3fdf033f5ef5', '3b33518d-a8b5-4a06-ad32-a5bfe0893a4a',
+                    '8fd3bec1-e8b9-4e8c-a7e8-3d47152d4e56'),
+                ('0dd535d3-2c0e-4dfc-aa3a-9f57c1c2a4c6', '3b33518d-a8b5-4a06-ad32-a5bfe0893a4a',
+                    'cf28adf1-bdaa-4a37-9175-a0676ff9d6c5'),
+                ('e3066a4a-744e-4164-b29b-de1125fa8db9', 'f6f85647-ad4c-4fd7-9d87-09c1e4f7a9d3',
+                    'cf28adf1-bdaa-4a37-9175-a0676ff9d6c5')
             ;
 
             insert into e
@@ -286,11 +298,11 @@ class TestUpdate(DatabaseTest):
 
 class TestJoin(DatabaseTest):
     def test_belongs_to_a(self):
-        result = B.order(B.id).join(B.a).get()
+        result = B.order(B.id).join(B.a_belongs_to).get()
         self.assertEqual(len(result), 3)
-        self.assertEqual(result[0].a.id, '31be0c81-f5ee-49b9-a624-356402427f76')
-        self.assertEqual(result[1].a.id, '2a12f545-c587-4b99-8fd2-57e79f7c8bca')
-        self.assertEqual(result[2].a.id, '31be0c81-f5ee-49b9-a624-356402427f76')
+        self.assertEqual(result[0].a_belongs_to.id, '31be0c81-f5ee-49b9-a624-356402427f76')
+        self.assertEqual(result[1].a_belongs_to.id, '2a12f545-c587-4b99-8fd2-57e79f7c8bca')
+        self.assertEqual(result[2].a_belongs_to.id, '31be0c81-f5ee-49b9-a624-356402427f76')
 
     def test_belongs_to_b(self):
         result = C.order(C.id).join(C.b).get()
@@ -299,12 +311,12 @@ class TestJoin(DatabaseTest):
         self.assertEqual(result[1].b.id, '3b33518d-a8b5-4a06-ad32-a5bfe0893a4a')
 
     def test_belongs_to_chain(self):
-        result = C.join(C.b).join(B.a).get()
+        result = C.join(C.b).join(B.a_belongs_to).get()
         self.assertEqual(len(result), 2)
         self.assertEqual(result[0].b.id, '3b33518d-a8b5-4a06-ad32-a5bfe0893a4a')
         self.assertEqual(result[1].b.id, '3b33518d-a8b5-4a06-ad32-a5bfe0893a4a')
-        self.assertEqual(result[0].b.a.id, '31be0c81-f5ee-49b9-a624-356402427f76')
-        self.assertEqual(result[1].b.a.id, '31be0c81-f5ee-49b9-a624-356402427f76')
+        self.assertEqual(result[0].b.a_belongs_to.id, '31be0c81-f5ee-49b9-a624-356402427f76')
+        self.assertEqual(result[1].b.a_belongs_to.id, '31be0c81-f5ee-49b9-a624-356402427f76')
 
     def test_belongs_to_multi(self):
         result = E.join(E.d1).join(E.d2).get()
@@ -313,27 +325,27 @@ class TestJoin(DatabaseTest):
         self.assertEqual(result[0].d2.id, '0dd535d3-2c0e-4dfc-aa3a-9f57c1c2a4c6')
 
     def test_has_many(self):
-        result = A.order(A.id).join(A.b).get()
+        result = A.order(A.id).join(A.b_has_many).get()
         self.assertEqual(len(result), 2)
-        self.assertEqual(len(result[0].b), 1)
-        self.assertEqual(len(result[1].b), 2)
-        self.assertEqual(result[0].b[0].id, 'b0825a6c-36bf-4415-abd7-0d0e5ee3e1c9')
-        self.assertEqual(result[1].b[0].id, '3b33518d-a8b5-4a06-ad32-a5bfe0893a4a')
-        self.assertEqual(result[1].b[1].id, 'f6f85647-ad4c-4fd7-9d87-09c1e4f7a9d3')
+        self.assertEqual(len(result[0].b_has_many), 1)
+        self.assertEqual(len(result[1].b_has_many), 2)
+        self.assertEqual(result[0].b_has_many[0].id, 'b0825a6c-36bf-4415-abd7-0d0e5ee3e1c9')
+        self.assertEqual(result[1].b_has_many[0].id, '3b33518d-a8b5-4a06-ad32-a5bfe0893a4a')
+        self.assertEqual(result[1].b_has_many[1].id, 'f6f85647-ad4c-4fd7-9d87-09c1e4f7a9d3')
 
     def test_has_many_chain(self):
-        result = A.order(A.id).join(A.b).join(B.c).get()
+        result = A.order(A.id).join(A.b_has_many).join(B.c_has_many).get()
         self.assertEqual(len(result), 2)
-        self.assertEqual(len(result[0].b), 1)
-        self.assertEqual(len(result[1].b), 2)
-        self.assertEqual(len(result[0].b[0].c), 0)
-        self.assertEqual(len(result[1].b[0].c), 2)
-        self.assertEqual(len(result[1].b[1].c), 0)
-        self.assertEqual(result[1].b[0].id, '3b33518d-a8b5-4a06-ad32-a5bfe0893a4a')
-        self.assertEqual(result[1].b[1].id, 'f6f85647-ad4c-4fd7-9d87-09c1e4f7a9d3')
-        self.assertEqual(result[1].b[0].c[0].id, '8fd3bec1-e8b9-4e8c-a7e8-3d47152d4e56')
-        self.assertEqual(result[1].b[0].c[1].id, '9fd3bec1-e8b9-4e8c-a7e8-3d47152d4e56')
-        self.assertEqual(result[0].b[0].id, 'b0825a6c-36bf-4415-abd7-0d0e5ee3e1c9')
+        self.assertEqual(len(result[0].b_has_many), 1)
+        self.assertEqual(len(result[1].b_has_many), 2)
+        self.assertEqual(len(result[0].b_has_many[0].c_has_many), 0)
+        self.assertEqual(len(result[1].b_has_many[0].c_has_many), 2)
+        self.assertEqual(len(result[1].b_has_many[1].c_has_many), 0)
+        self.assertEqual(result[1].b_has_many[0].id, '3b33518d-a8b5-4a06-ad32-a5bfe0893a4a')
+        self.assertEqual(result[1].b_has_many[1].id, 'f6f85647-ad4c-4fd7-9d87-09c1e4f7a9d3')
+        self.assertEqual(result[1].b_has_many[0].c_has_many[0].id, '8fd3bec1-e8b9-4e8c-a7e8-3d47152d4e56')
+        self.assertEqual(result[1].b_has_many[0].c_has_many[1].id, '9fd3bec1-e8b9-4e8c-a7e8-3d47152d4e56')
+        self.assertEqual(result[0].b_has_many[0].id, 'b0825a6c-36bf-4415-abd7-0d0e5ee3e1c9')
 
     def test_has_one(self):
         result = C.order(C.id).join(C.d).get()
@@ -341,19 +353,37 @@ class TestJoin(DatabaseTest):
         self.assertEqual(result[0].d.id, '5e0954fc-2f2f-4a63-9665-3fdf033f5ef5')
         self.assertEqual(result[1].d, None)
 
-    def test_multi(self):
-        result = B.order(B.id).join(B.a).join(B.c).get()
+    def test_multi_from_different_models(self):
+        result = D.order(D.id).join(D.b_belongs_to).join(B.c_has_many).get()
         self.assertEqual(len(result), 3)
-        self.assertEqual(result[0].a.id, '31be0c81-f5ee-49b9-a624-356402427f76')
-        self.assertEqual(len(result[0].c), 2)
-        self.assertEqual(result[1].a.id, '2a12f545-c587-4b99-8fd2-57e79f7c8bca')
-        self.assertEqual(len(result[1].c), 0)
-        self.assertEqual(result[2].a.id, '31be0c81-f5ee-49b9-a624-356402427f76')
-        self.assertEqual(len(result[2].c), 0)
+        self.assertEqual(result[0].id, '0dd535d3-2c0e-4dfc-aa3a-9f57c1c2a4c6')
+        self.assertEqual(result[1].id, '5e0954fc-2f2f-4a63-9665-3fdf033f5ef5')
+        self.assertEqual(result[2].id, 'e3066a4a-744e-4164-b29b-de1125fa8db9')
+        self.assertEqual(result[0].b_belongs_to.id, '3b33518d-a8b5-4a06-ad32-a5bfe0893a4a')
+        self.assertEqual(result[1].b_belongs_to.id, '3b33518d-a8b5-4a06-ad32-a5bfe0893a4a')
+        self.assertEqual(result[2].b_belongs_to.id, 'f6f85647-ad4c-4fd7-9d87-09c1e4f7a9d3')
+        self.assertEqual(len(result[0].b_belongs_to.c_has_many), 2)
+        self.assertEqual(len(result[1].b_belongs_to.c_has_many), 2)
+        self.assertEqual(len(result[2].b_belongs_to.c_has_many), 0)
+
+    def test_multi_from_same_model(self):
+        result = B.order(B.id).join(B.a_belongs_to).join(B.c_has_many).get()
+        self.assertEqual(len(result), 3)
+        self.assertEqual(result[0].a_belongs_to.id, '31be0c81-f5ee-49b9-a624-356402427f76')
+        self.assertEqual(result[1].a_belongs_to.id, '2a12f545-c587-4b99-8fd2-57e79f7c8bca')
+        self.assertEqual(result[2].a_belongs_to.id, '31be0c81-f5ee-49b9-a624-356402427f76')
+        self.assertEqual(len(result[0].c_has_many), 2)
+        self.assertEqual(len(result[1].c_has_many), 0)
+        self.assertEqual(len(result[2].c_has_many), 0)
 
     def test_where(self):
-        result = A.join(A.b).where(A.id == '31be0c81-f5ee-49b9-a624-356402427f76').get()
+        result = A.join(A.b_has_many).where(A.id == '31be0c81-f5ee-49b9-a624-356402427f76').get()
         self.assertEqual(len(result), 1)
-        self.assertEqual(len(result[0].b), 2)
-        self.assertEqual(result[0].b[0].id, '3b33518d-a8b5-4a06-ad32-a5bfe0893a4a')
-        self.assertEqual(result[0].b[1].id, 'f6f85647-ad4c-4fd7-9d87-09c1e4f7a9d3')
+        self.assertEqual(len(result[0].b_has_many), 2)
+        self.assertEqual(result[0].b_has_many[0].id, '3b33518d-a8b5-4a06-ad32-a5bfe0893a4a')
+        self.assertEqual(result[0].b_has_many[1].id, 'f6f85647-ad4c-4fd7-9d87-09c1e4f7a9d3')
+
+    def test_where_in_association(self):
+        result = A.join(A.b_has_many).where(B.a_id == '31be0c81-f5ee-49b9-a624-356402427f76').get()
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].id, '31be0c81-f5ee-49b9-a624-356402427f76')

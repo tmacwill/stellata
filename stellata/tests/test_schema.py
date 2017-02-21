@@ -33,7 +33,7 @@ class Base(stellata.tests.base.Base):
     '''
 
     def test(self):
-        result = stellata.schema.migrate(db, models=[A, B], quiet=True)
+        result = stellata.schema.migrate(db, models=[A, B])
         return result
 
 class TestEmpty(Base):

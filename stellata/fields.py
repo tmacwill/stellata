@@ -10,20 +10,31 @@ class Boolean(stellata.field.Field):
 
     column_type = 'tinyint'
 
-class DateTime(stellata.field.Field):
-    """DATETIME column type."""
-
-    column_type = 'datetime'
-
 class Integer(stellata.field.Field):
     """INTEGER column type."""
 
     column_type = 'integer'
 
+class Numeric(stellata.field.Field):
+    """Numeric column type."""
+
+    column_type = 'numeric'
+
 class Text(stellata.field.Field):
     """TEXT column type."""
 
     column_type = 'text'
+
+class Timestamp(stellata.field.Field):
+    """TIMESTAMP column type."""
+
+    column_type = 'timestamp without time zone'
+
+    def __init__(self, length=None, null=True, default=None):
+        if default is None:
+            default = 'now()'
+
+        super().__init__(length, null, default)
 
 class UUID(stellata.field.Field):
     """UUID column type."""

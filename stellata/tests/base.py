@@ -1,5 +1,6 @@
 import stellata.database
 
+import random
 import unittest
 import unittest.mock
 
@@ -26,6 +27,7 @@ class Base(unittest.TestCase):
     down = None
 
     def setUp(self):
+        random.seed(12345)
         if self.up:
             db.execute(self.up)
 

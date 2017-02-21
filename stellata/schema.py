@@ -32,15 +32,15 @@ def _alter_table_string(field, primary_key=False, create=False):
 
     return result
 
-def _handle(database, statements, execute, quiet):
+def _handle(database, statements, execute):
     if not statements:
         return
 
-    for statement in statements:
-        if not quiet:
-            print(statement)
+    if not isinstance(statements, list):
+        statements = [statements]
 
-        if execute:
+    if execute:
+        for statement in statements:
             database.execute(statement)
 
     return statements
@@ -61,7 +61,7 @@ def _index_string(index):
 
     return sql
 
-def _migrate_indexes(database, models, execute, quiet):
+def _migrate_indexes(database, models, execute):
     result = []
     for model in models:
         # get the primary key for the table
@@ -84,6 +84,7 @@ def _migrate_indexes(database, models, execute, quiet):
         for index in model.__indexes__:
             if isinstance(index, stellata.index.PrimaryKey):
                 model_has_primary_key = True
+
                 # check if columns on primary key match columns defined on index
                 index_columns = ','.join([e.column for e in index.fields()])
                 if len(schema) > 0:
@@ -139,24 +140,24 @@ def _migrate_indexes(database, models, execute, quiet):
 
                     # if definitions don't match, then drop index and re-create
                     if index_string.lower().replace('"', '') != definition.lower().replace('"', ''):
-                        result.append(_handle(database, 'drop index "%s" ;' % index_name, execute, quiet))
-                        result.append(_handle(database, '%s ;' % index_string, execute, quiet))
+                        result.append('drop index "%s" ;' % index_name)
+                        result.append('%s ;' % index_string)
 
         # drop indexes that are no longer needed
         unused_indexes = existing_indexes - defined_index_names
         for unused_index in unused_indexes:
-            result.append(_handle(database, 'drop index "%s" ;' % unused_index, execute, quiet))
+            result.append('drop index "%s" ;' % unused_index)
 
         # add indexes that are missing
         missing_indexes = defined_index_names - existing_indexes
         for missing_index in missing_indexes:
             for defined_index in defined_indexes:
                 if missing_index == _index_name(defined_index):
-                    result.append(_handle(database, '%s ;' % _index_string(defined_index), execute, quiet))
+                    result.append('%s ;' % _index_string(defined_index))
 
     return result
 
-def _migrate_tables(database, models, execute, quiet):
+def _migrate_tables(database, models, execute):
     result = []
     for model in models:
         if not hasattr(model, '__table__') or not model.__table__:
@@ -177,7 +178,7 @@ def _migrate_tables(database, models, execute, quiet):
 
         # if table doesn't exist in schema, then it needs to be created
         if len(schema) == 0:
-            result.append(_handle(database, 'create table "%s" () ;' % model.__table__, execute, quiet))
+            result.append('create table "%s" () ;' % model.__table__)
 
         # get all columns that should exist in the database
         defined_columns = set()
@@ -195,12 +196,12 @@ def _migrate_tables(database, models, execute, quiet):
 
         # for convenience when using the psql CLI, add the dt column second
         for i, field in enumerate(defined_fields):
-            if field.column.endswith('dt'):
+            if field.column == 'dt':
                 defined_fields.pop(i)
                 defined_fields.insert(1, field)
                 break
 
-        # for each column that exists in the database, make sure it's metadata matches models
+        # for each column that exists in the database, make sure its metadata matches models
         existing_columns = set()
         for existing_column in schema:
             column_name, column_type, length, default, null = existing_column
@@ -213,27 +214,35 @@ def _migrate_tables(database, models, execute, quiet):
                             default != field.default or \
                             (null == 'YES' and not field.null) or \
                             (null == 'NO' and field.null):
-                        result += _handle(database, _alter_table_string(field), execute, quiet)
+                        result.extend(_alter_table_string(field))
 
         # drop columns that are no longer needed
         unused_columns = existing_columns - defined_columns
         for unused_column in unused_columns:
-            result += _handle(
-                database,
-                ['alter table "%s" drop column "%s" ;' % (model.__table__, unused_column)],
-                execute,
-                quiet
-            )
+            result.append('alter table "%s" drop column "%s" ;' % (model.__table__, unused_column))
 
         # add columns that are missing, preserving the order determined earlier
         missing_columns = defined_columns - existing_columns
         for field in defined_fields:
             if field.column in missing_columns:
-                result += _handle(database, _alter_table_string(field, create=True), execute, quiet)
+                result.extend(_alter_table_string(field, create=True))
 
     return result
 
-def migrate(database=None, models=None, execute=False, quiet=False):
+def drop_tables_and_lose_all_data(database, execute=False):
+    sql = '''
+        select
+            tablename
+        from pg_tables
+        where schemaname = 'public'
+    '''
+    tables = database.query(sql)
+
+    statements = ['drop table %s' % table['tablename'] for table in tables]
+    _handle(database, statements, execute)
+    return statements
+
+def migrate(database=None, models=None, execute=False):
     if not database:
         database = stellata.database.pool
 
@@ -241,6 +250,7 @@ def migrate(database=None, models=None, execute=False, quiet=False):
         models = stellata.model._models
 
     result = []
-    result.extend(_migrate_tables(database, models, execute, quiet))
-    result.extend(_migrate_indexes(database, models, execute, quiet))
+    result.extend(_migrate_tables(database, models, execute))
+    result.extend(_migrate_indexes(database, models, execute))
+    _handle(database, result, execute)
     return result

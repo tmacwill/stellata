@@ -1,6 +1,8 @@
 from typing import Union
 
 import collections
+import random
+import string
 import stellata.database
 import stellata.relations
 import stellata.model
@@ -102,29 +104,30 @@ class Query:
 
         return model(**data)
 
-    def _select_query(self):
+    def _select_query(self, alias_map=None):
+        alias_map = alias_map or {}
         columns = self._field_aliases()
 
         # add each join to the list of columns to select
         for join in self.joins:
             child = join.child()
-            columns += self._field_aliases(child.model, join.relation.column)
+            columns += self._field_aliases(child.model, join.alias)
 
         # base select query
         query = 'select %s from "%s" ' % (','.join(columns), self.model.__table__)
 
         # add each join clause
         if self.joins:
-            query += '%s ' % ' '.join(e.to_query() for e in self.joins)
+            query += '%s ' % ' '.join(e.to_query(alias_map) for e in self.joins)
 
         # add where clause
         where_values = tuple()
         if self.where_expression:
-            where_query, where_values = self.where_expression.to_query()
+            where_query, where_values = self.where_expression.to_query(alias_map)
             query += 'where %s' % where_query
 
         if self.order_expression:
-            query += ' %s' % self.order_expression.to_query()
+            query += ' %s' % self.order_expression.to_query(alias_map)
 
         return (query, where_values)
 
@@ -166,15 +169,24 @@ class Query:
         query, values = self._delete_query()
         self._pool().execute(query, values)
 
-    def get(self):
+    def get(self, one=False):
+        # each join has a unique string alias to prevent collisions, so create map we can use later
+        alias_map = {}
+        for join in self.joins:
+            alias_map[join.child().model.__table__] = join.alias
+
         result = []
         created = {}
-        query, values = self._select_query()
+        query, values = self._select_query(alias_map)
         rows = self._pool().query(query, values)
 
         # if we don't have any joins, then we're done
         if not self.joins:
-            return [self._row_to_object(self.model, row) for row in rows]
+            result = [self._row_to_object(self.model, row) for row in rows]
+            if one:
+                result = result[0]
+
+            return result
 
         # build directed graph and reversed directed graph of joins so we can identify leaves and roots
         adjacency_list = {}
@@ -189,7 +201,7 @@ class Query:
             reversed_adjacency_list.setdefault(child.model, [])
             reversed_adjacency_list[child.model].append(parent.model)
             join_map.setdefault(child.model, [])
-            join_map[child.model].append(join.relation)
+            join_map[child.model].append(join)
 
         # perform a DFS on the reversed directed graph to identify the root node
         root = None
@@ -223,16 +235,23 @@ class Query:
 
         # iterate over joins in order from leaf nodes to root node
         data = {}
-        aliases = {}
         parent_key = None
         for child_model in join_order:
-            for relation in join_map.get(child_model, []):
-                parent_model = relation.parent().model
-                parent_column = relation.parent().column
-                child_model = relation.child().model
-                child_column = relation.child().column
+            for join in join_map.get(child_model, []):
+                parent_model = join.relation.parent().model
+                parent_column = join.relation.parent().column
+                parent_table = join.relation.parent().model.__table__
+                parent_alias = alias_map.get(parent_table, parent_table)
+                parent_key = '%s.%s' % (parent_alias, join.relation.parent_id().column)
 
-                many = isinstance(relation, stellata.relations.HasMany)
+                child_model = join.relation.child().model
+                child_column = join.relation.child().column
+                child_table = join.relation.child().model.__table__
+                child_alias = join.alias
+                child_key = '%s.%s' % (child_alias, join.relation.child_id().column)
+
+                many = isinstance(join.relation, stellata.relations.HasMany)
+                belongs_to = isinstance(join.relation, stellata.relations.BelongsTo)
                 visited = set()
                 for row in rows:
                     # for each join, insert into a table that maps models to their descendents.
@@ -242,61 +261,68 @@ class Query:
                     # the general approach here is that we build up this table backwards, ensuring that all
                     # referenced values are inserted first. then, for each model, we can replace any
                     # fields that are actually references to other models with data already stored in the table.
-                    parent_key = '%s.%s' % (relation.id_field().model.__table__, relation.id_field().column)
                     parent_value = row[parent_key]
 
                     data.setdefault(parent_key, {})
                     data[parent_key].setdefault(parent_value, None)
 
                     # convert row to model objects, since that's what we'll ultimately return
-                    alias = relation.column
-                    child_row = self._row_to_object(child_model, row, alias)
-                    parent_row = self._row_to_object(parent_model, row)
+                    child_row = self._row_to_object(child_model, row, child_alias)
+                    parent_row = self._row_to_object(parent_model, row, parent_alias)
                     if data.get(parent_key, {}).get(parent_value):
                         parent_row = data[parent_key][parent_value]
 
                     # get values stored for this row and alias
                     v = [] if many else None
-                    if hasattr(data[parent_key][parent_value], alias) and \
-                            not isinstance(getattr(data[parent_key][parent_value], alias), stellata.relation.Relation):
-                        v = getattr(data[parent_key][parent_value], alias)
+                    if (
+                        hasattr(data[parent_key][parent_value], join.relation.column) and \
+                        not isinstance(
+                            getattr(data[parent_key][parent_value], join.relation.column),
+                            stellata.relation.Relation
+                        )
+                    ):
+                        v = getattr(data[parent_key][parent_value], join.relation.column)
 
                     # since joins are left joins, skip rows that are empty for the current join
-                    found = False
                     if child_row:
-                        # for each column in the row, check if it's a reference to another model
-                        for row_key, row_value in child_row.__dict__.items():
-                            key = '%s.%s' % (child_model.__table__, row_key)
-                            if key in data:
-                                found = True
-                                # grab the referenced object from the table and add it to this object
-                                if row_value not in visited:
-                                    if many:
-                                        v.append(data.get(key, {}).get(row_value, []))
-                                    else:
-                                        v = data.get(key, {}).get(row_value, [])
+                        child_row_id = getattr(child_row, join.relation.child_id().column)
 
-                                # de-duplicate rows, since parent data will be returned multiple times
-                                if not isinstance(relation, stellata.relations.BelongsTo):
-                                    visited.add(row_value)
-
-                        # for leaf node joins, just insert the child row since there are no references yet
-                        if not found:
+                        # if data for foreign key already exists, then use that
+                        if child_key in data:
                             if many:
-                                v.append(child_row)
+                                if child_row_id not in visited:
+                                    v.append(data.get(child_key, {}).get(child_row_id, []))
+                                    visited.add(child_row_id)
+                            else:
+                                v = data.get(child_key, {}).get(child_row_id, [])
+
+                        # if no data exists, then we must be at a leaf node, so use the row value
+                        else:
+                            if many:
+                                if child_row_id not in visited:
+                                    v.append(child_row)
+                                    visited.add(child_row_id)
                             else:
                                 v = child_row
 
                     # insert data into table
-                    setattr(parent_row, alias, v)
-                    data[parent_key][parent_value] = parent_row
+                    if parent_row:
+                        setattr(parent_row, join.relation.column, v)
+                        data[parent_key][parent_value] = parent_row
 
         # if no rows are returned, then return an empty list
-        if not parent_key:
+        if not parent_key or parent_key not in data:
             return []
 
         # final result is stored at the key representing the root model
-        return list(data[parent_key].values())
+        result = list(data[parent_key].values())
+        if one:
+            result = result[0]
+
+        return result
+
+    def get_one(self):
+        return self.get(one=True)
 
     def join(self, relation: 'stellata.relation.Relation'):
         self.joins.append(JoinExpression(relation))
@@ -337,6 +363,7 @@ class JoinExpression(Expression):
 
     def __init__(self, relation: 'stellata.relation.Relation'):
         self.relation = relation
+        self.alias = ''.join(random.choices(string.ascii_uppercase + string.ascii_lowercase, k=5))
 
     def child(self):
         return self.relation.child()
@@ -344,16 +371,20 @@ class JoinExpression(Expression):
     def parent(self):
         return self.relation.parent()
 
-    def to_query(self):
+    def to_query(self, alias_map=None):
+        alias_map = alias_map or {}
         parent = self.parent()
         child = self.child()
 
+        parent_table = alias_map.get(parent.model.__table__, parent.model.__table__)
+        child_table = alias_map.get(child.model.__table__, child.model.__table__)
+
         return 'left join "%s" as "%s" on "%s"."%s" = "%s"."%s"' % (
             child.model.__table__,
-            self.relation.column,
-            parent.model.__table__,
+            self.alias,
+            parent_table,
             parent.column,
-            self.relation.column,
+            self.alias,
             child.column
         )
 
@@ -367,9 +398,10 @@ class OrderByExpression(Expression):
         self.fields = fields
         self.order = order or 'asc'
 
-    def to_query(self):
+    def to_query(self, alias_map=None):
+        alias_map = alias_map or {}
         return 'order by %s %s' % (','.join([
-            '"%s"."%s"' % (field.model.__table__, field.column)
+            '"%s"."%s"' % (alias_map.get(field.model.__table__, field.model.__table__), field.column)
             for field in self.fields
         ]), self.order)
 
@@ -392,11 +424,13 @@ class SingleColumnExpression(Expression):
     def __and__(self, value: Expression):
         return MultiColumnExpression(self.model, self, value, 'and')
 
-    def to_query(self):
+    def to_query(self, alias_map=None):
+        alias_map = alias_map or {}
+        table = alias_map.get(self.model.__table__, self.model.__table__)
         if self.comparison == 'in':
             return (
                 '"%s"."%s" %s (%s)' % (
-                    self.model.__table__,
+                    table,
                     self.column,
                     self.comparison,
                     ','.join(['%s' for e in self.value])
@@ -404,7 +438,7 @@ class SingleColumnExpression(Expression):
                 self.value
             )
 
-        return ('"%s"."%s" %s %%s' % (self.model.__table__, self.column, self.comparison), [self.value])
+        return ('"%s"."%s" %s %%s' % (table, self.column, self.comparison), [self.value])
 
 class MultiColumnExpression(Expression):
     """Expression containing a two SingleColumnExpressions.
@@ -425,7 +459,8 @@ class MultiColumnExpression(Expression):
     def __and__(self, value: Expression):
         return MultiColumnExpression(self.model, self, value, 'and')
 
-    def to_query(self):
-        left_query, left_values = self.left.to_query()
-        right_query, right_values = self.right.to_query()
+    def to_query(self, alias_map=None):
+        alias_map = alias_map or {}
+        left_query, left_values = self.left.to_query(alias_map)
+        right_query, right_values = self.right.to_query(alias_map)
         return (' (%s %s %s) ' % (left_query, self.operator, right_query), left_values + right_values)
