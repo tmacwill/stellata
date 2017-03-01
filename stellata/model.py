@@ -1,5 +1,6 @@
 from typing import Union
 
+import contextlib
 import datetime
 import decimal
 import importlib
@@ -13,6 +14,7 @@ import stellata.relation
 import stellata.query
 
 _models = []
+_join_type = None
 
 class ModelType(type):
     """Metaclass for models.
@@ -91,6 +93,10 @@ class Model(metaclass=ModelType):
         return stellata.query.Query(cls, joins=[stellata.query.JoinExpression(relation)])
 
     @classmethod
+    def join_with(cls, join_type):
+        return stellata.query.Query(cls, join_type=join_type)
+
+    @classmethod
     def on(cls, database):
         return stellata.query.Query(cls, database=database)
 
@@ -101,6 +107,14 @@ class Model(metaclass=ModelType):
     @classmethod
     def where(cls, expression: 'stellata.query.Expression'):
         return stellata.query.Query(cls, where=expression)
+
+@contextlib.contextmanager
+def _join_with(join_type: str):
+    global _join_type
+    previous = _join_type
+    _join_type = join_type
+    yield
+    _join_type = previous
 
 def serialize(data, format: str = 'json', pretty: bool = False):
     """Serialize a stellata object to a string format."""

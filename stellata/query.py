@@ -13,7 +13,7 @@ class Query:
     A query is essentially a container for various Expression types, which serialize themselves to SQL.
     """
 
-    def __init__(self, model: type, database=None, joins=None, where=None, order=None):
+    def __init__(self, model: type, database=None, joins=None, where=None, order=None, join_type=None):
         if joins is None:
             joins = []
 
@@ -25,6 +25,7 @@ class Query:
         self.joins = joins
         self.where_expression = where
         self.order_expression = order
+        self.join_type = join_type
 
     def _delete_query(self):
         query = 'delete from "%s" ' % self.model.__table__
@@ -46,6 +47,173 @@ class Query:
             '"%s"."%s" as "%s.%s"' % (alias, field.column, alias, field.column)
             for field in model.__fields__
         ]
+
+    def _get_with_joins(self, one, join_order, join_map):
+        result = []
+
+        # each join has a unique string alias to prevent collisions, so create map we can use later
+        alias_map = {}
+        for join in self.joins:
+            alias_map[join.relation.child().model.__table__] = join.alias
+
+        query, values = self._select_query(alias_map)
+        rows = self._pool().query(query, values)
+
+        # iterate over joins in order from leaf nodes to root node
+        data = {}
+        parent_key = None
+        for child_model in join_order:
+            for join in join_map.get(child_model, []):
+                parent_model = join.relation.parent().model
+                parent_column = join.relation.parent().column
+                parent_table = join.relation.parent().model.__table__
+                parent_alias = alias_map.get(parent_table, parent_table)
+                parent_key = '%s.id' % parent_alias
+
+                child_model = join.relation.child().model
+                child_column = join.relation.child().column
+                child_table = join.relation.child().model.__table__
+                child_alias = join.alias
+                child_key = '%s.id' % child_alias
+
+                many = isinstance(join.relation, stellata.relations.HasMany)
+                visited = set()
+                for row in rows:
+                    # for each join, insert into a table that maps models to their descendents.
+                    # the first key is a model name, which maps to each returned model value.
+                    # so, for `A1 -> [B1, B2], A2 -> [B3], B1 -> [C1], B2 -> [C2]` we have:
+                    # {'b.id': {B1: [C1], B2: [C2], B3: []}, 'a.id': [{A1: [B1.C1, B2.C2], A2: [B3]}]}
+                    # the general approach here is that we build up this table backwards, ensuring that all
+                    # referenced values are inserted first. then, for each model, we can replace any
+                    # fields that are actually references to other models with data already stored in the table.
+                    parent_value = row[parent_key]
+                    data.setdefault(parent_key, {})
+                    data[parent_key].setdefault(parent_value, None)
+
+                    # convert row to model objects, since that's what we'll ultimately return
+                    child_row = self._row_to_object(child_model, row, child_alias)
+                    parent_row = self._row_to_object(parent_model, row, parent_alias)
+                    if data.get(parent_key, {}).get(parent_value):
+                        parent_row = data[parent_key][parent_value]
+
+                    # get values stored for this row and alias
+                    v = [] if many else None
+                    if (
+                        hasattr(data[parent_key][parent_value], join.relation.column) and \
+                        not isinstance(
+                            getattr(data[parent_key][parent_value], join.relation.column),
+                            stellata.relation.Relation
+                        )
+                    ):
+                        v = getattr(data[parent_key][parent_value], join.relation.column)
+
+                    # since joins are left joins, skip rows that are empty for the current join
+                    if child_row:
+                        child_row_id = child_row.id
+
+                        # if data for foreign key already exists, then use that
+                        if child_key in data:
+                            if many:
+                                if child_row_id not in visited:
+                                    v.append(data.get(child_key, {}).get(child_row_id, []))
+                                    visited.add(child_row_id)
+                            else:
+                                v = data.get(child_key, {}).get(child_row_id, [])
+
+                        # if no data exists, then we must be at a leaf node, so use the row value
+                        else:
+                            if many:
+                                if child_row_id not in visited:
+                                    v.append(child_row)
+                                    visited.add(child_row_id)
+                            else:
+                                v = child_row
+
+                    # insert data into table
+                    if parent_row:
+                        setattr(parent_row, join.relation.column, v)
+                        data[parent_key][parent_value] = parent_row
+
+        # if no rows are returned, then return an empty list
+        if not parent_key or parent_key not in data:
+            return []
+
+        # final result is stored at the key representing the root model
+        result = list(data[parent_key].values())
+        if one:
+            result = result[0]
+
+        return result
+
+    def _get_with_queries(self, one, join_order, join_map):
+        result = {}
+        data = {}
+        query, values = self._select_query(use_joins=False)
+        rows = self._pool().query(query, values)
+
+        # instantiate model objects from rows in initial query
+        for row in rows:
+            row_object = self._row_to_object(self.model, row)
+            data.setdefault(self.model, {})
+            data[self.model][row_object.id] = row_object
+
+        # for each join, store all rows in memory, then fetch all child rows for the join
+        # we need to store both the actual data as well as the map from parents -> children
+        for child_model in reversed(join_order):
+            for join in join_map.get(child_model, []):
+                belongs_to = isinstance(join.relation, stellata.relations.BelongsTo)
+                related_ids = []
+                related_field = None
+                if belongs_to:
+                    related_field = join.relation.child()
+                    related_ids = [
+                        getattr(row, join.relation.foreign_key().column)
+                        for row in data[join.relation.parent().model].values()
+                    ]
+                else:
+                    related_field = join.relation.foreign_key()
+                    related_ids = list(data.get(join.relation.parent().model, {}).keys())
+
+                rows = join.relation.child().model.where(related_field << related_ids).get()
+                row_ids = []
+                for row in rows:
+                    data.setdefault(join.relation.child().model, {})
+                    data[join.relation.child().model][row.id] = row
+                    row_ids.append(row.id)
+
+        # now that all rows are in memory, associate children with their parents by aggregating children
+        # by the foreign key and then setting attributes on the parents
+        for child_model in join_order[:-1]:
+            for join in join_map.get(child_model, []):
+                many = isinstance(join.relation, stellata.relations.HasMany)
+                belongs_to = isinstance(join.relation, stellata.relations.BelongsTo)
+
+                # for belongs to, index into the child and set the value on the parent
+                if belongs_to:
+                    for parent in data[join.relation.parent().model].values():
+                        setattr(
+                            parent,
+                            join.relation.column,
+                            data[join.relation.child().model].get(getattr(parent, join.relation.foreign_key().column))
+                        )
+
+                # for has many/one, aggregate children by their ID, then attach that to the parent
+                else:
+                    children_by_parent_id = {}
+                    for child in data.get(join.relation.child().model, {}).values():
+                        parent_id = getattr(child, join.relation.foreign_key().column)
+                        if many:
+                            children_by_parent_id.setdefault(parent_id, [])
+                            children_by_parent_id[parent_id].append(child)
+                        else:
+                            children_by_parent_id[parent_id] = child
+
+                    for parent_id in data.get(join.relation.parent().model, {}).keys():
+                        parent = data[join.relation.parent().model][parent_id]
+                        children = children_by_parent_id.get(parent_id, [] if many else None)
+                        setattr(parent, join.relation.column, children)
+
+        return list(data.get(join_order[-1], {}).values())
 
     def _insert_query(self, data: Union[list, dict], unique=None, one=False):
         # construct list of field names and placeholders for escaped values
@@ -104,20 +272,21 @@ class Query:
 
         return model(**data)
 
-    def _select_query(self, alias_map=None):
+    def _select_query(self, alias_map=None, use_joins=True):
         alias_map = alias_map or {}
         columns = self._field_aliases()
 
         # add each join to the list of columns to select
-        for join in self.joins:
-            child = join.child()
-            columns += self._field_aliases(child.model, join.alias)
+        if use_joins:
+            for join in self.joins:
+                child = join.relation.child()
+                columns += self._field_aliases(child.model, join.alias)
 
         # base select query
         query = 'select %s from "%s" ' % (','.join(columns), self.model.__table__)
 
         # add each join clause
-        if self.joins:
+        if self.joins and use_joins:
             query += '%s ' % ' '.join(e.to_query(alias_map) for e in self.joins)
 
         # add where clause
@@ -170,18 +339,10 @@ class Query:
         self._pool().execute(query, values)
 
     def get(self, one=False):
-        # each join has a unique string alias to prevent collisions, so create map we can use later
-        alias_map = {}
-        for join in self.joins:
-            alias_map[join.child().model.__table__] = join.alias
-
-        result = []
-        created = {}
-        query, values = self._select_query(alias_map)
-        rows = self._pool().query(query, values)
-
-        # if we don't have any joins, then we're done
+        # if we don't have any joins, then just grab rows and we're done
         if not self.joins:
+            query, values = self._select_query()
+            rows = self._pool().query(query, values)
             result = [self._row_to_object(self.model, row) for row in rows]
             if one:
                 result = result[0]
@@ -189,19 +350,20 @@ class Query:
             return result
 
         # build directed graph and reversed directed graph of joins so we can identify leaves and roots
+        join_order = []
         adjacency_list = {}
         reversed_adjacency_list = {}
         join_map = {}
         for join in self.joins:
-            parent = join.parent()
-            child = join.child()
+            parent = join.relation.parent().model
+            child = join.relation.child().model
 
-            adjacency_list.setdefault(parent.model, [])
-            adjacency_list[parent.model].append(child.model)
-            reversed_adjacency_list.setdefault(child.model, [])
-            reversed_adjacency_list[child.model].append(parent.model)
-            join_map.setdefault(child.model, [])
-            join_map[child.model].append(join)
+            adjacency_list.setdefault(parent, [])
+            adjacency_list[parent].append(child)
+            reversed_adjacency_list.setdefault(child, [])
+            reversed_adjacency_list[child].append(parent)
+            join_map.setdefault(child, [])
+            join_map[child].append(join)
 
         # perform a DFS on the reversed directed graph to identify the root node
         root = None
@@ -229,103 +391,23 @@ class Query:
                 join_order.append(root)
             explored.add(root)
 
-        join_order = []
         explored = set()
         _build_join_order(adjacency_list, root, join_order, explored)
 
-        # iterate over joins in order from leaf nodes to root node
-        data = {}
-        parent_key = None
-        for child_model in join_order:
-            for join in join_map.get(child_model, []):
-                parent_model = join.relation.parent().model
-                parent_column = join.relation.parent().column
-                parent_table = join.relation.parent().model.__table__
-                parent_alias = alias_map.get(parent_table, parent_table)
-                parent_key = '%s.%s' % (parent_alias, join.relation.parent_id().column)
+        if self.join_type == 'join' or (not self.join_type and stellata.model._join_type == 'join'):
+            return self._get_with_joins(one, join_order, join_map)
 
-                child_model = join.relation.child().model
-                child_column = join.relation.child().column
-                child_table = join.relation.child().model.__table__
-                child_alias = join.alias
-                child_key = '%s.%s' % (child_alias, join.relation.child_id().column)
-
-                many = isinstance(join.relation, stellata.relations.HasMany)
-                belongs_to = isinstance(join.relation, stellata.relations.BelongsTo)
-                visited = set()
-                for row in rows:
-                    # for each join, insert into a table that maps models to their descendents.
-                    # the first key is a model name, which maps to each returned model value.
-                    # so, for `A1 -> [B1, B2], A2 -> [B3], B1 -> [C1], B2 -> [C2]` we have:
-                    # {'b.id': {B1: [C1], B2: [C2], B3: []}, 'a.id': [{A1: [B1.C1, B2.C2], A2: [B3]}]}
-                    # the general approach here is that we build up this table backwards, ensuring that all
-                    # referenced values are inserted first. then, for each model, we can replace any
-                    # fields that are actually references to other models with data already stored in the table.
-                    parent_value = row[parent_key]
-
-                    data.setdefault(parent_key, {})
-                    data[parent_key].setdefault(parent_value, None)
-
-                    # convert row to model objects, since that's what we'll ultimately return
-                    child_row = self._row_to_object(child_model, row, child_alias)
-                    parent_row = self._row_to_object(parent_model, row, parent_alias)
-                    if data.get(parent_key, {}).get(parent_value):
-                        parent_row = data[parent_key][parent_value]
-
-                    # get values stored for this row and alias
-                    v = [] if many else None
-                    if (
-                        hasattr(data[parent_key][parent_value], join.relation.column) and \
-                        not isinstance(
-                            getattr(data[parent_key][parent_value], join.relation.column),
-                            stellata.relation.Relation
-                        )
-                    ):
-                        v = getattr(data[parent_key][parent_value], join.relation.column)
-
-                    # since joins are left joins, skip rows that are empty for the current join
-                    if child_row:
-                        child_row_id = getattr(child_row, join.relation.child_id().column)
-
-                        # if data for foreign key already exists, then use that
-                        if child_key in data:
-                            if many:
-                                if child_row_id not in visited:
-                                    v.append(data.get(child_key, {}).get(child_row_id, []))
-                                    visited.add(child_row_id)
-                            else:
-                                v = data.get(child_key, {}).get(child_row_id, [])
-
-                        # if no data exists, then we must be at a leaf node, so use the row value
-                        else:
-                            if many:
-                                if child_row_id not in visited:
-                                    v.append(child_row)
-                                    visited.add(child_row_id)
-                            else:
-                                v = child_row
-
-                    # insert data into table
-                    if parent_row:
-                        setattr(parent_row, join.relation.column, v)
-                        data[parent_key][parent_value] = parent_row
-
-        # if no rows are returned, then return an empty list
-        if not parent_key or parent_key not in data:
-            return []
-
-        # final result is stored at the key representing the root model
-        result = list(data[parent_key].values())
-        if one:
-            result = result[0]
-
-        return result
+        return self._get_with_queries(one, join_order, join_map)
 
     def get_one(self):
         return self.get(one=True)
 
     def join(self, relation: 'stellata.relation.Relation'):
         self.joins.append(JoinExpression(relation))
+        return self
+
+    def join_with(self, join_type):
+        self.join_type = join_type
         return self
 
     def on(self, database: 'stellata.database.Pool'):
@@ -365,16 +447,10 @@ class JoinExpression(Expression):
         self.relation = relation
         self.alias = ''.join(random.choices(string.ascii_uppercase + string.ascii_lowercase, k=5))
 
-    def child(self):
-        return self.relation.child()
-
-    def parent(self):
-        return self.relation.parent()
-
     def to_query(self, alias_map=None):
         alias_map = alias_map or {}
-        parent = self.parent()
-        child = self.child()
+        parent = self.relation.parent()
+        child = self.relation.child()
 
         parent_table = alias_map.get(parent.model.__table__, parent.model.__table__)
         child_table = alias_map.get(child.model.__table__, child.model.__table__)

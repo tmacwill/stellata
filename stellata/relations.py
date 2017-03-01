@@ -1,31 +1,22 @@
 import stellata.relation
 
 class BelongsTo(stellata.relation.Relation):
-    def child_id(self):
-        return super().child_id()
+    def child(self):
+        return self._parent()
 
-    def parent_id(self):
-        if self.id_lambda:
-            return self.id_lambda()
-
-        return super().parent_id()
+    def parent(self):
+        return self.foreign_key_lambda()
 
 class HasMany(stellata.relation.Relation):
-    def child_id(self):
-        if self.id_lambda:
-            return self.id_lambda()
+    def child(self):
+        return self.foreign_key_lambda()
 
-        return super().child_id()
-
-    def parent_id(self):
-        return super().parent_id()
+    def parent(self):
+        return self._parent()
 
 class HasOne(stellata.relation.Relation):
-    def child_id(self):
-        if self.id_lambda:
-            return self.id_lambda()
+    def child(self):
+        return self.foreign_key_lambda()
 
-        return super().child_id()
-
-    def parent_id(self):
-        return super().parent_id()
+    def parent(self):
+        return self._parent()

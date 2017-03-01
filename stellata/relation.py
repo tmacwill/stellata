@@ -8,26 +8,22 @@ class Relation:
     Table args are given within a lambda to avoid issues where classes aren't defined yet.
     """
 
-    def __init__(self, model_lambda, id_lambda=None):
-        self.model_lambda = model_lambda
-        self.id_lambda = id_lambda
+    def __init__(self, foreign_key, parent=None):
+        self.foreign_key_lambda = foreign_key
+        self.parent_lambda = parent or (lambda: self.model.id)
+
+    def _parent(self):
+        parent = self.parent_lambda()
+        if isinstance(parent, stellata.model.ModelType):
+            parent = parent.id
+
+        return parent
+
+    def foreign_key(self):
+        return self.foreign_key_lambda()
 
     def child(self):
-        models = self.model_lambda()
-        if isinstance(models, stellata.field.Field):
-            return models
-
-        return models[1] if models[0].model == self.model else models[0]
+        raise NotImplementedError()
 
     def parent(self):
-        models = self.model_lambda()
-        if isinstance(models, stellata.field.Field):
-            return self.model.id
-
-        return models[0] if models[0].model == self.model else models[1]
-
-    def child_id(self):
-        return self.child().model.id
-
-    def parent_id(self):
-        return self.parent().model.id
+        raise NotImplementedError()
