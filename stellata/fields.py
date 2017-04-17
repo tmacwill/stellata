@@ -6,9 +6,9 @@ class BigInteger(stellata.field.Field):
     column_type = 'bigint'
 
 class Boolean(stellata.field.Field):
-    """TINYINT column type."""
+    """BOOLEAN column type."""
 
-    column_type = 'tinyint'
+    column_type = 'boolean'
 
 class Integer(stellata.field.Field):
     """INTEGER column type."""
@@ -30,8 +30,8 @@ class Timestamp(stellata.field.Field):
 
     column_type = 'timestamp without time zone'
 
-    def __init__(self, length=None, null=True, default=None):
-        if default is None:
+    def __init__(self, length=None, null=True, default=''):
+        if default == '':
             default = 'now()'
 
         super().__init__(length, null, default)
@@ -41,8 +41,8 @@ class UUID(stellata.field.Field):
 
     column_type = 'uuid'
 
-    def __init__(self, length=None, null=True, default=None):
-        if default is None:
+    def __init__(self, length=None, null=True, default=''):
+        if default == '':
             default = 'uuid_generate_v1mc()'
 
         super().__init__(length, null, default)

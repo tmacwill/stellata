@@ -215,8 +215,9 @@ class Query:
 
         return list(data.get(join_order[-1], {}).values())
 
-    def _insert_query(self, data: Union[list, dict], unique=None, one=False):
+    def _insert_query(self, objects: list, unique=None, one=False):
         # construct list of field names and placeholders for escaped values
+        data = [e.to_dict() for e in objects]
         columns = list(data[0].keys())
         fields = ' (%s)' % ','.join(sorted(columns))
         values = ' values ' + ','.join([
@@ -238,7 +239,7 @@ class Query:
                 update_columns = unique.get('update', [])
 
             unique_string = ' on conflict (%s) do update set %s' % (
-                ','.join(unique_columns),
+                ','.join([e.column for e in unique_columns]),
                 ', '.join(['%s = excluded.%s' % (column, column) for column in update_columns])
             )
 
@@ -300,13 +301,13 @@ class Query:
 
         return (query, where_values)
 
-    def _update_query(self, set_values: dict):
+    def _update_query(self, data: 'stellata.model.Model'):
         values = []
         query = 'update "%s" ' % self.model.__table__
 
-        update = ','.join([e + ' = %s' for e in set_values.keys()])
+        update = ','.join([e + ' = %s' for e in data.to_dict().keys()])
         query += 'set %s ' % update
-        values += list(set_values.values())
+        values += list(data.to_dict().values())
 
         where_query, where_values = self.where_expression.to_query()
         query += 'where %s returning ' % where_query
@@ -316,7 +317,7 @@ class Query:
         query += ','.join(self._field_aliases())
         return (query, values)
 
-    def create(self, data: Union[dict, list], unique=None):
+    def create(self, data: Union['stellata.model.Model', list], unique=None):
         # accept both a list and single dictionary as an argument
         one = False
         if not isinstance(data, list):
@@ -344,7 +345,7 @@ class Query:
             query, values = self._select_query()
             rows = self._pool().query(query, values)
             result = [self._row_to_object(self.model, row) for row in rows]
-            if one:
+            if one and len(result) > 0:
                 result = result[0]
 
             return result
@@ -418,8 +419,8 @@ class Query:
         self.order_expression = OrderByExpression(fields, order)
         return self
 
-    def update(self, set_values: dict):
-        query, values = self._update_query(set_values)
+    def update(self, data: 'stellata.model.Model'):
+        query, values = self._update_query(data)
         rows = self._pool().query(query, values)
         return [self._row_to_object(self.model, row) for row in rows]
 
@@ -489,6 +490,9 @@ class SingleColumnExpression(Expression):
     """
 
     def __init__(self, model: 'stellata.model.Model', column: str, comparison: str, value: Union[int, str, bool]):
+        if value is None:
+            comparison = 'is' if comparison == '=' else 'is not'
+
         self.model = model
         self.column = column
         self.comparison = comparison
@@ -513,6 +517,9 @@ class SingleColumnExpression(Expression):
                 ),
                 self.value
             )
+
+        if self.value == None:
+            return ('"%s"."%s" %s null' % (table, self.column, self.comparison), [])
 
         return ('"%s"."%s" %s %%s' % (table, self.column, self.comparison), [self.value])
 

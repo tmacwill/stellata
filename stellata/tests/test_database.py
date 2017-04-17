@@ -37,7 +37,7 @@ class TestPool(stellata.tests.base.Base):
         self.assertEqual(len(db2.query("select * from a")), 0)
 
     def test_model(self):
-        A.create({'foo': 'bar'})
+        A.create(A(foo='bar'))
         self.assertEqual(len(A.where(A.foo == 'bar').get()), 1)
         self.assertEqual(len(A.on(db).where(A.foo == 'bar').get()), 1)
         self.assertEqual(len(A.where(A.foo == 'bar').on(db).get()), 1)

@@ -1,5 +1,6 @@
 import stellata.database
 import stellata.fields
+import stellata.index
 import stellata.model
 import stellata.relations
 import stellata.tests.base
@@ -14,6 +15,8 @@ class A(stellata.model.Model):
 
     # note: some attribute names intentionally mismatch tables to test that
     b_has_many = stellata.relations.HasMany(lambda: B.a_id, lambda: A)
+
+    index_id = stellata.index.Index(lambda: A.id, unique=True)
 
 class B(stellata.model.Model):
     __table__ = 'b'
@@ -54,26 +57,28 @@ class E(stellata.model.Model):
 
 class TestCreateQuery(stellata.tests.base.Base):
     @stellata.tests.base.mock_query()
-    def test_single(self, query):
-        A.create({A.id.column: 5, A.foo.column: 'foo'})
+    def test_conflict(self, query):
+        A.create(A(id=1, foo='foo'), unique=(A.id, A.foo))
         query.assert_called_with(
-            'insert into "a" (foo,id) values (%s,%s) returning "a"."id" as "a.id","a"."foo" as "a.foo"',
-            ['foo', 5]
+            'insert into "a" (foo,id) values (%s,%s) on conflict (id,foo) do update set '
+            'id = excluded.id, foo = excluded.foo returning "a"."id" as "a.id","a"."foo" as "a.foo"',
+            ['foo', 1]
         )
 
     @stellata.tests.base.mock_query()
     def test_multi(self, query):
-        A.create([{
-            A.id.column: 1,
-            A.foo.column: 'foo'
-        }, {
-            A.id.column: 2,
-            A.foo.column: 'bar'
-        }])
-
+        A.create([A(id=1, foo='foo'), A(id=2, foo='bar')])
         query.assert_called_with(
             'insert into "a" (foo,id) values (%s,%s),(%s,%s) returning "a"."id" as "a.id","a"."foo" as "a.foo"',
             ['foo', 1, 'bar', 2]
+        )
+
+    @stellata.tests.base.mock_query()
+    def test_single(self, query):
+        A.create(A(id=5, foo='foo'))
+        query.assert_called_with(
+            'insert into "a" (foo,id) values (%s,%s) returning "a"."id" as "a.id","a"."foo" as "a.foo"',
+            ['foo', 5]
         )
 
 class TestDeleteQuery(stellata.tests.base.Base):
@@ -150,7 +155,7 @@ class TestJoinQuery(stellata.tests.base.Base):
 class TestUpdateQuery(stellata.tests.base.Base):
     @stellata.tests.base.mock_query()
     def test_single(self, query):
-        A.where(A.id == 1).update({A.id.column: 2})
+        A.where(A.id == 1).update(A(id=2))
         query.assert_called_with(
             'update "a" set id = %s where "a"."id" = %s returning "a"."id" as "a.id","a"."foo" as "a.foo"',
             [2, 1]
@@ -158,7 +163,7 @@ class TestUpdateQuery(stellata.tests.base.Base):
 
     @stellata.tests.base.mock_query()
     def test_multi(self, query):
-        A.where(A.id == 1).update({A.id.column: 2, A.foo.column: 'foo'})
+        A.where(A.id == 1).update(A(id=2, foo='foo'))
         query.assert_called_with(
             'update "a" set id = %s,foo = %s where "a"."id" = %s returning "a"."id" as "a.id","a"."foo" as "a.foo"',
             [2, 'foo', 1]
@@ -244,7 +249,32 @@ class DatabaseTest(stellata.tests.base.Base):
                 ('9eb774ca-62ac-4455-b489-2b0b585f5dd5', '5e0954fc-2f2f-4a63-9665-3fdf033f5ef5',
                     '0dd535d3-2c0e-4dfc-aa3a-9f57c1c2a4c6')
             ;
+
+            create unique index "a__index_id" on "a" using btree (id);
         ''')
+
+class TestCreate(DatabaseTest):
+    def test_conflict(self):
+        result = db.query('''select * from a where foo = 'foobar' ''')
+        self.assertEqual(len(result), 0)
+
+        A.create(A(id='2a12f545-c587-4b99-8fd2-57e79f7c8bca', foo='foobar'), unique=A.id)
+        result = db.query('''select * from a where foo = 'foobar' ''')
+        self.assertEqual(len(result), 1)
+
+    def test_multi(self):
+        db.execute('''truncate a''')
+
+        A.create([A(foo='foo'), A(foo='bar')])
+        result = db.query('''select * from a''')
+        self.assertEqual(len(result), 2)
+
+    def test_single(self):
+        db.execute('''truncate a''')
+        A.create(A(foo='foo'))
+
+        result = db.query('''select * from a''')
+        self.assertEqual(len(result), 1)
 
 class TestDelete(DatabaseTest):
     def test_where(self):
@@ -286,7 +316,7 @@ class TestGet(DatabaseTest):
 
 class TestUpdate(DatabaseTest):
     def test_where(self):
-        result = A.where(A.foo == 'bar').update({'foo': 'qux'})
+        result = A.where(A.foo == 'bar').update(A(foo='qux'))
         self.assertEqual(result[0].id, '31be0c81-f5ee-49b9-a624-356402427f76')
         self.assertEqual(result[0].foo, 'qux')
 

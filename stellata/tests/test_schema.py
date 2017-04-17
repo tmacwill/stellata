@@ -250,10 +250,10 @@ class TestModifyColumnDefault(Base):
     def test(self):
         result = super().test()
         self.assertEqual(result, [
-            'alter table "a" alter column "id" type uuid ;',
+            'alter table "a" alter column "id" type uuid using "id"::uuid ;',
             'alter table "a" alter column "id" set not null ;',
             'alter table "a" alter column "id" set default uuid_generate_v1mc() ;',
-            'alter table "b" alter column "id" type uuid ;',
+            'alter table "b" alter column "id" type uuid using "id"::uuid ;',
             'alter table "b" alter column "id" set not null ;',
             'alter table "b" alter column "id" set default uuid_generate_v1mc() ;'
         ])
@@ -306,7 +306,7 @@ class TestModifyColumnNull(Base):
             'alter table "a" alter column "foo" type text ;',
             'alter table "a" alter column "foo" drop not null ;',
             'alter table "a" alter column "foo" drop default ;',
-            'alter table "b" alter column "id" type uuid ;',
+            'alter table "b" alter column "id" type uuid using "id"::uuid ;',
             'alter table "b" alter column "id" set not null ;',
             'alter table "b" alter column "id" set default uuid_generate_v1mc() ;',
             'alter table "b" alter column "bar" type integer ;',

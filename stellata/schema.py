@@ -14,6 +14,8 @@ def _alter_table_string(field, primary_key=False, create=False):
             result.append('%s %s ;' % (prefix, field.column_type))
     else:
         prefix = '%s alter column "%s" type %s' % (alter, field.column, field.column_type)
+        if field.column_type == 'uuid':
+            prefix += ' using "%s"::uuid' % field.column
         if field.length:
             result.append('%s (%s) ;' % (prefix, field.length))
         else:
