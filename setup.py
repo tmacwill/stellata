@@ -3,7 +3,7 @@ import setuptools
 import sys
 
 if sys.version_info[0] < 3:
-    sys.exit("stellata requires Python 3.")
+    sys.exit("Stellata requires Python 3.")
 
 here = os.path.abspath(os.path.dirname(__file__))
 with open(os.path.join(here, 'README.rst'), encoding='utf-8') as f:

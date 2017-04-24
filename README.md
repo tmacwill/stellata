@@ -155,10 +155,14 @@ Jeez Rick, what's that syntax? We're using operator overloading, Morty. What els
     A.where(A.bar > 1).get()
     A.where(A.id << ['2a12f545-c587-4b99-8fd2-57e79f7c8bca', '31be0c81-f5ee-49b9-a624-356402427f76']).get()
 
-That last one is a where in query, in case that wasn't burp obvious. We can also use AND and OR in our queries like so:
+That last one is a where in query, in case that wasn't—burp—obvious. We can also use AND and OR in our queries like so:
 
     A.where((A.id == '2a12f545-c587-4b99-8fd2-57e79f7c8bca') | (A.bar < 5)).get()
     A.where((A.id == '2a12f545-c587-4b99-8fd2-57e79f7c8bca') & (A.bar > 1)).get()
+
+Other bells and whistles:
+
+    A.where(A.bar < 5).order(A.bar, 'asc').limit(5).get()
 
 Finally, we can use those relations we set up earlier with joins. Let's say we create the following:
 
@@ -168,7 +172,6 @@ Finally, we can use those relations we set up earlier with joins. Let's say we c
         B(a_id='2a12f545-c587-4b99-8fd2-57e79f7c8bca', qux=3)
         B(a_id='2a12f545-c587-4b99-8fd2-57e79f7c8bca', qux=5)
     ])
-
 
 Now, we can do this:
 

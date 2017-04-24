@@ -13,7 +13,7 @@ class Query:
     A query is essentially a container for various Expression types, which serialize themselves to SQL.
     """
 
-    def __init__(self, model: type, database=None, joins=None, where=None, order=None, join_type=None):
+    def __init__(self, model: type, database=None, joins=None, where=None, order=None, limit=None, join_type=None):
         if joins is None:
             joins = []
 
@@ -25,6 +25,7 @@ class Query:
         self.joins = joins
         self.where_expression = where
         self.order_expression = order
+        self.limit_expression = limit
         self.join_type = join_type
 
     def _delete_query(self):
@@ -299,6 +300,9 @@ class Query:
         if self.order_expression:
             query += ' %s' % self.order_expression.to_query(alias_map)
 
+        if self.limit_expression:
+            query += ' %s' % self.limit_expression.to_query()
+
         return (query, where_values)
 
     def _update_query(self, data: 'stellata.model.Model'):
@@ -411,6 +415,10 @@ class Query:
         self.join_type = join_type
         return self
 
+    def limit(self, n):
+        self.limit_expression = LimitExpression(n)
+        return self
+
     def on(self, database: 'stellata.database.Pool'):
         self.database = database
         return self
@@ -464,6 +472,13 @@ class JoinExpression(Expression):
             self.alias,
             child.column
         )
+
+class LimitExpression(Expression):
+    def __init__(self, n):
+        self.n = n
+
+    def to_query(self):
+        return 'limit %s' % self.n
 
 class OrderByExpression(Expression):
     """Expression containing a list of ORDER BY clauses."""

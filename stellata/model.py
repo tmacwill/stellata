@@ -97,6 +97,10 @@ class Model(metaclass=ModelType):
         return stellata.query.Query(cls, join_type=join_type)
 
     @classmethod
+    def limit(cls, n):
+        return stellata.query.Query(cls, limit=stellata.query.LimitExpression(n))
+
+    @classmethod
     def on(cls, database):
         return stellata.query.Query(cls, database=database)
 

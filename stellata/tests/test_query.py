@@ -289,6 +289,12 @@ class TestGet(DatabaseTest):
         self.assertEqual(result[0].foo, 'baz')
         self.assertEqual(result[1].foo, 'bar')
 
+    def test_limit(self):
+        result = A.order(A.id).where(A.foo << ['bar', 'baz']).get()
+        self.assertEqual(len(result), 2)
+        result = A.order(A.id).limit(1).where(A.foo << ['bar', 'baz']).get()
+        self.assertEqual(len(result), 1)
+
     def test_or(self):
         result = A.order(A.id).where((A.foo == 'bar') | (A.foo == 'baz')).get()
         self.assertEqual(len(result), 2)
