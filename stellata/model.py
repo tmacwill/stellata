@@ -81,12 +81,36 @@ class Model(metaclass=ModelType):
         for k, v in kwargs.items():
             setattr(self, k, v)
 
+    def to_dict(self):
+        return self.__dict__
+
+    @classmethod
+    def begin(cls, database=None):
+        cls.execute('begin', database=database)
+
+    @classmethod
+    def commit(cls, database=None):
+        cls.execute('commit', database=database)
+
     @classmethod
     def create(cls, data: Union[list, dict], unique=None):
         return stellata.query.Query(cls).create(data, unique)
 
-    def to_dict(self):
-        return self.__dict__
+    @classmethod
+    def execute(cls, sql: str, args: tuple = None, database=None):
+        db = database
+        if not db:
+            db = cls.__database__
+        if not db:
+            db = stellata.database.pool
+        if not db:
+            return
+
+        db.execute(sql, args)
+
+    @classmethod
+    def get(cls):
+        return stellata.query.Query(cls).get()
 
     @classmethod
     def join(cls, relation: 'stellata.relation.Relation'):
@@ -107,6 +131,14 @@ class Model(metaclass=ModelType):
     @classmethod
     def order(cls, fields: list, order=None):
         return stellata.query.Query(cls, order=stellata.query.OrderByExpression(fields, order))
+
+    @classmethod
+    def truncate(cls, database=None):
+        cls.execute('truncate "%s"' % cls.__table__, database=database)
+
+    @classmethod
+    def update(cls, data: 'stellata.model.Model'):
+        return stellata.query.Query(cls).update(data)
 
     @classmethod
     def where(cls, expression: 'stellata.query.Expression'):

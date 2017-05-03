@@ -312,14 +312,18 @@ class Query:
         update = ','.join([e + ' = %s' for e in data.to_dict().keys()])
         query += 'set %s ' % update
         values += list(data.to_dict().values())
+        has_where = False
 
-        where_query, where_values = self.where_expression.to_query()
-        query += 'where %s returning ' % where_query
-        values += where_values
+        if self.where_expression:
+            where_query, where_values = self.where_expression.to_query()
+            query += 'where %s returning ' % where_query
+            values += where_values
 
-        # return all data from updated objects, so caller can determine which rows where changed
-        query += ','.join(self._field_aliases())
-        return (query, values)
+            # return all data from updated objects, so caller can determine which rows where changed
+            query += ','.join(self._field_aliases())
+            has_where = True
+
+        return (query, values, has_where)
 
     def create(self, data: Union['stellata.model.Model', list], unique=None):
         # accept both a list and single dictionary as an argument
@@ -428,9 +432,13 @@ class Query:
         return self
 
     def update(self, data: 'stellata.model.Model'):
-        query, values = self._update_query(data)
-        rows = self._pool().query(query, values)
-        return [self._row_to_object(self.model, row) for row in rows]
+        query, values, has_where = self._update_query(data)
+
+        if has_where:
+            rows = self._pool().query(query, values)
+            return [self._row_to_object(self.model, row) for row in rows]
+
+        return self._pool().execute(query, values)
 
     def where(self, expression: 'Expression'):
         self.where_expression = expression

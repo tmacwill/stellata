@@ -23,8 +23,14 @@ class Field:
         return stellata.query.SingleColumnExpression(self.model, self.column, '>', value)
 
     def __lshift__(self, value: list):
+        if len(value) == 0:
+            return None
+
         return stellata.query.SingleColumnExpression(self.model, self.column, 'in', value)
 
     # in case people forget which way the arrows go, lol
     def __rshift__(self, value: list):
+        if len(value) == 0:
+            return None
+
         return self.__lshift__(value)
