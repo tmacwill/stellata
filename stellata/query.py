@@ -1,6 +1,7 @@
 from typing import Union
 
 import collections
+import enum
 import random
 import string
 import stellata.database
@@ -101,6 +102,7 @@ class Query:
                     v = [] if many else None
                     if (
                         hasattr(data[parent_key][parent_value], join.relation.column) and \
+                        getattr(data[parent_key][parent_value], join.relation.column) and \
                         not isinstance(
                             getattr(data[parent_key][parent_value], join.relation.column),
                             stellata.relation.Relation
@@ -169,7 +171,7 @@ class Query:
                     related_field = join.relation.child()
                     related_ids = [
                         getattr(row, join.relation.foreign_key().column)
-                        for row in data[join.relation.parent().model].values()
+                        for row in data.get(join.relation.parent().model, {}).values()
                     ]
                 else:
                     related_field = join.relation.foreign_key()
@@ -191,11 +193,12 @@ class Query:
 
                 # for belongs to, index into the child and set the value on the parent
                 if belongs_to:
-                    for parent in data[join.relation.parent().model].values():
+                    for parent in data.get(join.relation.parent().model, {}).values():
                         setattr(
                             parent,
                             join.relation.column,
-                            data[join.relation.child().model].get(getattr(parent, join.relation.foreign_key().column))
+                            data.get(join.relation.child().model, {}) \
+                                .get(getattr(parent, join.relation.foreign_key().column))
                         )
 
                 # for has many/one, aggregate children by their ID, then attach that to the parent
@@ -247,6 +250,9 @@ class Query:
         # concatenate query parts and execute
         returning = ' returning %s' % ','.join(self._field_aliases())
         sql = 'insert into "' + self.model.__table__ + '"' + fields + values + unique_string + returning
+
+        # convert enum values to scalars
+        args = [e.value if isinstance(e, enum.Enum) else e for e in args]
         return (sql, args)
 
     def _pool(self):
@@ -303,6 +309,8 @@ class Query:
         if self.limit_expression:
             query += ' %s' % self.limit_expression.to_query()
 
+        # convert enum values to scalars
+        where_values = [e.value if isinstance(e, enum.Enum) else e for e in where_values]
         return (query, where_values)
 
     def _update_query(self, data: 'stellata.model.Model'):
@@ -567,6 +575,18 @@ class MultiColumnExpression(Expression):
 
     def to_query(self, alias_map=None):
         alias_map = alias_map or {}
-        left_query, left_values = self.left.to_query(alias_map)
-        right_query, right_values = self.right.to_query(alias_map)
+        left_query = ''
+        left_values = []
+        right_query = ''
+        right_values = []
+
+        if self.left:
+            left_query, left_values = self.left.to_query(alias_map)
+        if self.right:
+            right_query, right_values = self.right.to_query(alias_map)
+
+        # if either of the operands evaluates to None, then the operator is meaningless
+        if not self.left or not self.right:
+            self.operator = ''
+
         return (' (%s %s %s) ' % (left_query, self.operator, right_query), left_values + right_values)

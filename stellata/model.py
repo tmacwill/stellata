@@ -68,7 +68,7 @@ class ModelType(type):
         _models.append(class_instance)
         return class_instance
 
-class Model(metaclass=ModelType):
+class Model(object, metaclass=ModelType):
     """Model definition.
 
     Each model corresponds to a database table.
@@ -78,8 +78,18 @@ class Model(metaclass=ModelType):
     __database__ = None
 
     def __init__(self, *args, **kwargs):
+        # set all values given in constructor
         for k, v in kwargs.items():
             setattr(self, k, v)
+
+    def __getattribute__(self, attribute):
+        # when accessing fields that haven't been set on instances, return None rather than a meta object
+        result = object.__getattribute__(self, attribute)
+        if isinstance(result, stellata.field.Field) or isinstance(result, stellata.relation.Relation) \
+                or isinstance(result, stellata.index.Index):
+            return None
+
+        return result
 
     def to_dict(self):
         return self.__dict__
@@ -107,6 +117,22 @@ class Model(metaclass=ModelType):
             return
 
         db.execute(sql, args)
+
+    @classmethod
+    def find(cls, ids, field=None):
+        one = False
+        if not isinstance(ids, list):
+            ids = [ids]
+            one = True
+
+        if not field:
+            field = cls.id
+
+        result = cls.where(field << ids).get()
+        if one:
+            return result[0] if len(result) > 0 else None
+
+        return {getattr(e, field.column): e for e in result}
 
     @classmethod
     def get(cls):
@@ -151,6 +177,10 @@ def _join_with(join_type: str):
     _join_type = join_type
     yield
     _join_type = previous
+
+def registered():
+    global _models
+    return [e for e in _models if hasattr(e, '__table__') and e.__table__]
 
 def serialize(data, format: str = 'json', pretty: bool = False):
     """Serialize a stellata object to a string format."""

@@ -320,6 +320,28 @@ class TestGet(DatabaseTest):
         result = A.where(A.foo == 'no').get()
         self.assertEqual(len(result), 0)
 
+class TestFind(DatabaseTest):
+    def test_single(self):
+        A.create([
+            A(id='8ff4f9fb-2817-4e28-9c41-a0d84a8ffa2c', foo='bar'),
+            A(id='67e28bfd-d5b9-44b8-afff-be4962a26b83', foo='baz'),
+        ])
+
+        self.assertEqual(A.find('8ff4f9fb-2817-4e28-9c41-a0d84a8ffa2c').foo, 'bar')
+        self.assertEqual(A.find('9ff4f9fb-2817-4e28-9c41-a0d84a8ffa2c'), None)
+
+    def test_multi(self):
+        A.create([
+            A(id='8ff4f9fb-2817-4e28-9c41-a0d84a8ffa2c', foo='bar'),
+            A(id='67e28bfd-d5b9-44b8-afff-be4962a26b83', foo='baz'),
+            A(id='1227cae5-0dc8-48f1-bbc6-8c28d8e382ee', foo='qux'),
+        ])
+
+        result = A.find(['8ff4f9fb-2817-4e28-9c41-a0d84a8ffa2c', '67e28bfd-d5b9-44b8-afff-be4962a26b83'])
+        self.assertEqual(result['8ff4f9fb-2817-4e28-9c41-a0d84a8ffa2c'].foo, 'bar')
+        self.assertEqual(result['67e28bfd-d5b9-44b8-afff-be4962a26b83'].foo, 'baz')
+        self.assertFalse('87e28bfd-d5b9-44b8-afff-be4962a26b83' in result)
+
 class TestUpdate(DatabaseTest):
     def test_where(self):
         result = A.where(A.foo == 'bar').update(A(foo='qux'))

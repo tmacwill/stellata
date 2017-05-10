@@ -77,7 +77,7 @@ two related models, ``A`` and ``B``:
         foo = stellata.fields.Text()
         bar = stellata.fields.Integer(default=0, null=False)
 
-        b = stellata.relations.HasMany(lambda: B.A_id, lambda: A)
+        b = stellata.relations.HasMany(lambda: B.a_id)
 
     class B(stellata.model.Model):
         __table__ = 'b'
@@ -112,6 +112,31 @@ table:
 
         primary_key = stellata.index.PrimaryKey(lambda: A.id)
         foo_index = stellata.index.Index(lambda: A.foo, unique=True)
+
+Serialization
+~~~~~~~~~~~~~
+
+Once you have some data, it won't be long until you want to convert it
+to JSON. To do so, use:
+
+::
+
+    stellata.model.serialize(model)
+
+This will recursively serialize objects/relations, and you can pass it
+an object, dictionary, list, etc.
+
+Meta
+~~~~
+
+In some cases, it's handy to be able to iterate over all of the models
+you've defined. For example, you might want to truncate tables for a
+unit test. In that case, you can do this:
+
+::
+
+    for model in stellata.model.registered():
+        # do something with model
 
 Migration
 ---------
@@ -206,7 +231,7 @@ What else can we do?
     A.where(A.bar > 1).get()
     A.where(A.id << ['2a12f545-c587-4b99-8fd2-57e79f7c8bca', '31be0c81-f5ee-49b9-a624-356402427f76']).get()
 
-That last one is a where in query, in case that wasn't burp obvious. We
+That last one is a where in query, in case that wasn't—burp—obvious. We
 can also use AND and OR in our queries like so:
 
 ::
@@ -214,8 +239,40 @@ can also use AND and OR in our queries like so:
     A.where((A.id == '2a12f545-c587-4b99-8fd2-57e79f7c8bca') | (A.bar < 5)).get()
     A.where((A.id == '2a12f545-c587-4b99-8fd2-57e79f7c8bca') & (A.bar > 1)).get()
 
-Finally, we can use those relations we set up earlier with joins. Let's
-say we create the following:
+Other bells and whistles:
+
+::
+
+    A.where(A.bar < 5).order(A.bar, 'asc').limit(5).get()
+
+A common read operation is to find all rows where a column matches some
+value, so we can use a shorthand:
+
+::
+
+    A.find('2a12f545-c587-4b99-8fd2-57e79f7c8bca')
+
+By default, the ``id`` field will be used, but you can also specify your
+own field:
+
+::
+
+    A.find(5, A.bar)
+
+If given a list, ``find`` will return a dictionary keyed on the value of
+the field you specify:
+
+::
+
+    a = A.find(['2a12f545-c587-4b99-8fd2-57e79f7c8bca', '31be0c81-f5ee-49b9-a624-356402427f76'])
+    a['2a12f545-c587-4b99-8fd2-57e79f7c8bca'].id == '2a12f545-c587-4b99-8fd2-57e79f7c8bca'
+    a['31be0c81-f5ee-49b9-a624-356402427f76'].id == '31be0c81-f5ee-49b9-a624-356402427f76'
+
+Joins
+~~~~~
+
+We can use those relations we set up earlier with joins. Let's say we
+create the following:
 
 ::
 
@@ -276,3 +333,21 @@ This one is easy now.
 ::
 
     A.where(id == '2a12f545-c587-4b99-8fd2-57e79f7c8bca').delete()
+
+Or, if you prefer a single TRUNCATE operation:
+
+::
+
+    A.truncate()
+
+Transactions
+~~~~~~~~~~~~
+
+Stellata also has support for PostgreSQL transactions:
+
+::
+
+    A.begin()
+    A.truncate()
+    A.create([A(bar=1), A(bar=2)])
+    A.commit()
