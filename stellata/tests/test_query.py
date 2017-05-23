@@ -16,7 +16,7 @@ class A(stellata.model.Model):
     # note: some attribute names intentionally mismatch tables to test that
     b_has_many = stellata.relations.HasMany(lambda: B.a_id, lambda: A)
 
-    index_id = stellata.index.Index(lambda: A.id, unique=True)
+    id__foo__index = stellata.index.Index(lambda: (A.id, A.foo), unique=True)
 
 class B(stellata.model.Model):
     __table__ = 'b'
@@ -57,8 +57,17 @@ class E(stellata.model.Model):
 
 class TestCreateQuery(stellata.tests.base.Base):
     @stellata.tests.base.mock_query()
-    def test_conflict(self, query):
+    def test_conflict_fields(self, query):
         A.create(A(id=1, foo='foo'), unique=(A.id, A.foo))
+        query.assert_called_with(
+            'insert into "a" (foo,id) values (%s,%s) on conflict (id,foo) do update set '
+            'id = excluded.id, foo = excluded.foo returning "a"."id" as "a.id","a"."foo" as "a.foo"',
+            ['foo', 1]
+        )
+
+    @stellata.tests.base.mock_query()
+    def test_conflict_index(self, query):
+        A.create(A(id=1, foo='foo'), unique=A.id__foo__index)
         query.assert_called_with(
             'insert into "a" (foo,id) values (%s,%s) on conflict (id,foo) do update set '
             'id = excluded.id, foo = excluded.foo returning "a"."id" as "a.id","a"."foo" as "a.foo"',
@@ -250,15 +259,31 @@ class DatabaseTest(stellata.tests.base.Base):
                     '0dd535d3-2c0e-4dfc-aa3a-9f57c1c2a4c6')
             ;
 
-            create unique index "a__index_id" on "a" using btree (id);
+            create unique index "a__id__foo__index" on "a" using btree (id, foo);
         ''')
 
 class TestCreate(DatabaseTest):
-    def test_conflict(self):
+    def test_conflict_fields(self):
         result = db.query('''select * from a where foo = 'foobar' ''')
         self.assertEqual(len(result), 0)
 
-        A.create(A(id='2a12f545-c587-4b99-8fd2-57e79f7c8bca', foo='foobar'), unique=A.id)
+        A.create(A(id='2a12f545-c587-4b99-8fd2-57e79f7c8bca', foo='foobar'), unique=(A.id, A.foo))
+        result = db.query('''select * from a where foo = 'foobar' ''')
+        self.assertEqual(len(result), 1)
+
+        A.create(A(id='2a12f545-c587-4b99-8fd2-57e79f7c8bca', foo='foobar'), unique=(A.id, A.foo))
+        result = db.query('''select * from a where foo = 'foobar' ''')
+        self.assertEqual(len(result), 1)
+
+    def test_conflict_index(self):
+        result = db.query('''select * from a where foo = 'foobar' ''')
+        self.assertEqual(len(result), 0)
+
+        A.create(A(id='2a12f545-c587-4b99-8fd2-57e79f7c8bca', foo='foobar'), unique=A.id__foo__index)
+        result = db.query('''select * from a where foo = 'foobar' ''')
+        self.assertEqual(len(result), 1)
+
+        A.create(A(id='2a12f545-c587-4b99-8fd2-57e79f7c8bca', foo='foobar'), unique=A.id__foo__index)
         result = db.query('''select * from a where foo = 'foobar' ''')
         self.assertEqual(len(result), 1)
 
@@ -272,6 +297,13 @@ class TestCreate(DatabaseTest):
     def test_single(self):
         db.execute('''truncate a''')
         A.create(A(foo='foo'))
+
+        result = db.query('''select * from a''')
+        self.assertEqual(len(result), 1)
+
+    def test_save(self):
+        db.execute('''truncate a''')
+        A(foo='foo').save()
 
         result = db.query('''select * from a''')
         self.assertEqual(len(result), 1)

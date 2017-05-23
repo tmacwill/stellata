@@ -8,6 +8,7 @@ import psycopg2.extras
 import stellata.model
 
 pool = None
+log = logging.getLogger('stellata')
 
 class Pool:
     """Database connection pool instance.
@@ -42,14 +43,14 @@ class Pool:
         """Execute a SQL query with no return value."""
 
         with self._cursor() as cursor:
-            logging.debug('Running SQL: ' + str((sql, args)))
+            log.debug('Running SQL: ' + str((sql, args)))
             cursor.execute(sql, args)
 
     def query(self, sql: str, args: tuple = None):
         """Execute a SQL query with a return value."""
 
         with self._cursor() as cursor:
-            logging.debug('Running SQL: ' + str((sql, args)))
+            log.debug('Running SQL: ' + str((sql, args)))
             cursor.execute(sql, args)
             return cursor.fetchall()
 

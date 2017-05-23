@@ -5,6 +5,7 @@ import enum
 import random
 import string
 import stellata.database
+import stellata.index
 import stellata.relations
 import stellata.model
 
@@ -232,18 +233,32 @@ class Query:
         # handle unique indexes
         unique_string = ''
         if unique:
-            # if no columns are given, then update all columns
-            unique_columns = unique
-            if not isinstance(unique_columns, tuple) and not isinstance(unique_columns, list):
-                unique_columns = [unique_columns]
+            # assume a list of fields is given by default
+            unique_fields = unique
 
+            # if a dictionary is given, then extract columns
+            if isinstance(unique, dict):
+                if 'columns' in unique:
+                    unique_fields = unique['columns']
+                if 'index' in unique:
+                    unique_fields = unique['index']
+
+            # if index is given, then expand to all columns in that index
+            if isinstance(unique_fields, stellata.index.Index):
+                assert unique_fields.unique
+                unique_fields = unique_fields.fields()
+
+            # if a single column is passed, then convert to a list
+            elif isinstance(unique_fields, stellata.field.Field):
+                unique_fields = [unique_fields]
+
+            # if no columns are given, then update all columns
             update_columns = columns
             if isinstance(unique, dict):
-                unique_columns = unique['columns']
                 update_columns = unique.get('update', [])
 
             unique_string = ' on conflict (%s) do update set %s' % (
-                ','.join([e.column for e in unique_columns]),
+                ','.join([e.column for e in unique_fields]),
                 ', '.join(['%s = excluded.%s' % (column, column) for column in update_columns])
             )
 

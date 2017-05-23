@@ -29,5 +29,5 @@ setuptools.setup(
     name='stellata',
     packages=setuptools.find_packages(),
     url='https://github.com/tmacwill/stellata',
-    version='0.0.1',
+    version='0.0.2',
 )

@@ -103,7 +103,7 @@ class Model(object, metaclass=ModelType):
         cls.execute('commit', database=database)
 
     @classmethod
-    def create(cls, data: Union[list, dict], unique=None):
+    def create(cls, data, unique=None):
         return stellata.query.Query(cls).create(data, unique)
 
     @classmethod
@@ -149,6 +149,9 @@ class Model(object, metaclass=ModelType):
     @classmethod
     def limit(cls, n):
         return stellata.query.Query(cls, limit=stellata.query.LimitExpression(n))
+
+    def save(self, unique=False):
+        return self.__class__.create(self, unique=unique)
 
     @classmethod
     def on(cls, database):
