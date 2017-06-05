@@ -10,6 +10,11 @@ class Boolean(stellata.field.Field):
 
     column_type = 'boolean'
 
+class Date(stellata.field.Field):
+    """DATE column type."""
+
+    column_type = 'date'
+
 class Integer(stellata.field.Field):
     """INTEGER column type."""
 

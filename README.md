@@ -1,6 +1,6 @@
 # Stellata
 
-Stellata is a simple PostgreSQL ORM for Python 3.
+Stellata is a simple, but fully-featured PostgreSQL ORM for Python 3.
 
 ## Connecting
 

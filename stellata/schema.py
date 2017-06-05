@@ -27,14 +27,14 @@ def _alter_table_string(field, primary_key=False, create=False):
     else:
         result.append('%s set not null ;' % alter)
 
-    if field.default:
+    if field.default is not None:
         result.append('%s set default %s ;' % (alter, field.default))
     else:
         result.append('%s drop default ;' % alter)
 
     return result
 
-def _handle(database, statements, execute):
+def _handle(database, statements, execute, debug=False):
     if not statements:
         return
 
@@ -43,6 +43,9 @@ def _handle(database, statements, execute):
 
     if execute:
         for statement in statements:
+            if debug:
+                print(statement)
+
             database.execute(statement)
 
     return statements
@@ -213,7 +216,7 @@ def _migrate_tables(database, models, execute):
                 if field.column == column_name:
                     if column_type != field.column_type or \
                             length != field.length or \
-                            default != field.default or \
+                            str(default) != str(field.default) or \
                             (null == 'YES' and not field.null) or \
                             (null == 'NO' and field.null):
                         result.extend(_alter_table_string(field))
@@ -244,7 +247,7 @@ def drop_tables_and_lose_all_data(database, execute=False):
     _handle(database, statements, execute)
     return statements
 
-def migrate(database=None, models=None, execute=False):
+def migrate(database=None, models=None, execute=False, debug=False):
     if not database:
         database = stellata.database.pool
 
@@ -254,5 +257,5 @@ def migrate(database=None, models=None, execute=False):
     result = []
     result.extend(_migrate_tables(database, models, execute))
     result.extend(_migrate_indexes(database, models, execute))
-    _handle(database, result, execute)
+    _handle(database, result, execute, debug)
     return result
