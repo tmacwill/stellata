@@ -14,4 +14,4 @@ class Index:
 
 class PrimaryKey(Index):
     def __init__(self, fields_lambda, primary_key=True, unique=False):
-        return super().__init__(fields_lambda, primary_key, unique)
+        return super().__init__(fields_lambda, primary_key, True)

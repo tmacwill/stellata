@@ -5,6 +5,7 @@ import datetime
 import decimal
 import importlib
 import json
+import msgpack
 import re
 
 import stellata.database
@@ -104,6 +105,8 @@ class Model(object, metaclass=ModelType):
 
     @classmethod
     def create(cls, data, unique=None):
+        if not data:
+            return
         return stellata.query.Query(cls).create(data, unique)
 
     @classmethod
@@ -196,10 +199,13 @@ def serialize(data, format: str = 'json', pretty: bool = False):
             return obj.isoformat()
         elif isinstance(obj, decimal.Decimal):
             return float(obj)
-        elif hasattr(obj, 'json_encode'):
-            return obj.json_encode()
+        elif hasattr(obj, 'serialize'):
+            return obj.serialize()
 
         return obj
+
+    if format == 'msgpack':
+        return msgpack.packb(data, default=encode)
 
     if format == 'json':
         if pretty:

@@ -21,6 +21,7 @@ setuptools.setup(
     ],
     description='A simple ORM for PostgreSQL.',
     install_requires=[
+        'msgpack-python',
         'psycopg2',
     ],
     license='MIT',
